@@ -1,0 +1,102 @@
+[project]
+name = "quiche-py"
+description = "Python bindings for google/quiche (QUIC / HTTP/3 / WebTransport over HTTP/3)"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_LICENSES.md"]
+authors = [{ name = "Shiguredo Inc.", email = "contact+pypi@shiguredo.jp" }]
+classifiers = [
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Free Threading :: 2 - Beta",
+]
+dynamic = ["version"]
+
+[project.urls]
+Changelog = "https://github.com/shiguredo/quiche-py/blob/develop/CHANGES.md"
+Discord = "https://discord.gg/shiguredo"
+Source = "https://github.com/shiguredo/quiche-py"
+
+[dependency-groups]
+dev = [
+  { include-group = "lint" },
+  { include-group = "test" },
+]
+lint = [
+  "ruff",  # フォーマット・lint
+  "ty",  # 静的型チェック
+]
+test = [
+  "hypothesis",  # PBT
+  "pytest",  # ユニット / E2E テスト
+  "pytest-asyncio",  # asyncio テスト
+]
+# E2E テスト用。aioquic は C 拡張で limited API を強制するため free-threaded ビルドでは
+# インストールできない。dev に含めず、通常ビルドの CI でのみ --group e2e で導入する。
+e2e = [
+  "aioquic",  # E2E 用 QUIC エコーサーバー
+]
+
+[build-system]
+requires = [
+  "nanobind",  # C++ バインディング
+  "scikit-build-core",  # CMake ビルドバックエンド
+]
+build-backend = "scikit_build_core.build"
+
+[tool.pytest.ini_options]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+# エコーサーバー起動時の CancelledError 等を _startup_error 経由で再送出するため、
+# BaseException を広い except で受け取る必要がある。
+"tests/conftest.py" = ["BLE001"]
+
+[tool.scikit-build]
+minimum-version = "1.0"
+sdist.include = ["VERSION", "deps.json", "THIRD_PARTY_LICENSES.md"]
+build-dir = "_build"
+
+[tool.scikit-build.cmake]
+version = ">=4.2"
+
+[tool.scikit-build.build]
+verbose = false
+
+[tool.scikit-build.wheel]
+packages = ["src/quiche"]
+expand-macos-universal-tags = true
+
+[[tool.dynamic-metadata]]
+provider = "scikit_build_core.metadata.regex"
+field = "version"
+input = "VERSION"
+regex = "^(?P<value>.+)$"
+
+[tool.ty]
+
+[tool.uv]
+managed = true
+python-preference = "only-managed"
+# uv sync は packaged project (既定) として拡張を editable install する。
+# 拡張のビルドは QUICHE 取得と Bazel build を伴い重いため、ここに挙げたビルド入力に
+# 変更が無ければ uv は前回のビルドを再利用し、再ビルドを走らせない。
+# C++ ソースやビルド設定を変えたときだけ再ビルドされる。
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "CMakeLists.txt" },
+  { file = "BUILD.bazel" },
+  { file = "deps.json" },
+  { file = "src/bindings/**" },
+]

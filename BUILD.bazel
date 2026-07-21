@@ -1,0 +1,55 @@
+# QUICHE コア + クライアント用グルーを共有ライブラリにまとめ、CMake の
+# nanobind 拡張は単一の C API エントリポイント経由で利用する。
+#
+# linkopts の OS 分岐は @platforms ではなく @bazel_tools の組込み
+# config_setting を使う。これにより QUICHE の MODULE.bazel へ
+# bazel_dep(platforms) を追記しなくてよい。
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+licenses(["notice"])
+
+cc_library(
+    name = "quiche_glue_lib",
+    srcs = [
+        "src/bindings/quiche_glue.cc",
+        "src/bindings/quiche_glue_http3.cc",
+        "src/bindings/quiche_glue_wt.cc",
+    ],
+    hdrs = [
+        "src/bindings/quiche_glue.h",
+        "src/bindings/quiche_glue_exports.h",
+        "src/bindings/quiche_glue_sans_io.h",
+    ],
+    includes = ["src/bindings"],
+    # quiche_py_get_api の唯一の参照元は Bazel 外の nanobind 拡張 (quiche_ext) のため、
+    # Bazel リンク内では何もこのオブジェクトを参照しない。alwayslink で常にリンクし、
+    # GNU ld でも quiche_py_get_api が libquiche_for_python.so に定義されるようにする
+    # (これがないと Linux で undefined symbol: quiche_py_get_api になる)。
+    alwayslink = True,
+    deps = [
+        # QuicClientBase / FakeProofVerifier / LookupAddress 等は tool_support 側。
+        # io_tool_support (実ソケット I/O) は sans-I/O 化後は不要。
+        "//quiche:quiche_unstable_api",
+        "//quiche:quiche_unstable_api_tool_support",
+    ],
+)
+
+cc_binary(
+    name = "quiche_for_python",
+    linkshared = True,
+    linkstatic = True,
+    deps = [":quiche_glue_lib"],
+    linkopts = select({
+        "@bazel_tools//src/conditions:darwin": [
+            "-Wl,-exported_symbol,_quiche_py_get_api",
+        ],
+        "@bazel_tools//src/conditions:linux_x86_64": [
+            "-Wl,--export-dynamic-symbol=quiche_py_get_api",
+        ],
+        "@bazel_tools//src/conditions:linux_aarch64": [
+            "-Wl,--export-dynamic-symbol=quiche_py_get_api",
+        ],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+)

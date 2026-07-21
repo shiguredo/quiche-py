@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info/
+dist/
+wheelhouse/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Build
+_build/
+_deps/
+src/quiche/quiche_ext.pyi
+
+# macOS
+.DS_Store
+
+# Agent
+.codex/
+.claude/

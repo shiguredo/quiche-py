@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    paths-ignore:
+      - "**.md"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - run: uvx ruff check
+      - run: uvx ruff format --check
+
+  test:
+    name: test
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: ubuntu-24.04_x86_64
+            runs_on: ubuntu-24.04
+          - name: macos-26_arm64
+            runs_on: macos-26
+        python_version:
+          - "3.14"
+          - "3.14t"
+    runs-on: ${{ matrix.platform.runs_on }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+          python-version: ${{ matrix.python_version }}
+
+      - name: Install Bazelisk
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # 標準 Ubuntu リポジトリに bazelisk パッケージは無いため、GitHub releases
+            # からランナーアーキテクチャに合ったバイナリを取得してインストールする。
+            case "${{ runner.arch }}" in
+              X64) bazelisk_arch=amd64 ;;
+              ARM64) bazelisk_arch=arm64 ;;
+              *) echo "unsupported runner.arch: ${{ runner.arch }}" && exit 1 ;;
+            esac
+            curl -fsSL -o /tmp/bazelisk "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-${bazelisk_arch}"
+            sudo install -m 0755 /tmp/bazelisk /usr/local/bin/bazelisk
+          else
+            brew install bazelisk
+          fi
+
+      - name: Cache Bazel
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-${{ matrix.platform.name }}-python-${{ matrix.python_version }}-${{ hashFiles('deps.json', 'BUILD.bazel', 'src/bindings/**') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-${{ matrix.platform.name }}-python-${{ matrix.python_version }}-
+            ${{ runner.os }}-bazel-${{ matrix.platform.name }}-
+
+      - name: Build and install
+        run: |
+          # aioquic (e2e グループ) は free-threaded ビルド非対応のため、通常ビルドでのみ
+          # インストールする。
+          if [ "${{ matrix.python_version }}" = "3.14t" ]; then
+            uv sync
+          else
+            uv sync --group e2e
+          fi
+
+      - name: Type check
+        # aioquic (e2e) は free-threaded 非対応でインストールされないため、conftest の
+        # 条件付き import が解決できず ty が失敗する。型チェックは通常ビルドでのみ行う。
+        if: ${{ matrix.python_version != '3.14t' }}
+        run: uvx ty check
+
+      - name: Run tests
+        run: uv run pytest
+
+  slack-notify:
+    needs: [lint, test]
+    if: always()
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - uses: shiguredo/github-actions/.github/actions/slack-notify@main
+        with:
+          status: ${{ job.status }}
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
+          slack_channel: python-oss
+          notify_mode: failure_and_fixed
+        env:
+          GH_TOKEN: ${{ github.token }}
