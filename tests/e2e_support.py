@@ -7,6 +7,7 @@ import select
 import socket
 import time
 from collections.abc import Callable
+from typing import Protocol
 
 import quiche
 
@@ -126,8 +127,20 @@ async def connect_async(
     return client
 
 
+class AsyncReadableStream(Protocol):
+    """fin まで read できる非同期ストリームの共通インターフェース。
+
+    AsyncQuicStream と AsyncWebTransportStream は同一の read シグネチャを
+    持つため、両者を同じヘルパで扱えるようにする。
+    """
+
+    async def read(
+        self, max_bytes: int = 65536, *, timeout: float | None = None
+    ) -> tuple[bytes, bool]: ...
+
+
 async def read_until_fin_async(
-    stream: quiche.AsyncQuicStream,
+    stream: AsyncReadableStream,
     timeout: float = 5.0,
     *,
     max_bytes: int = 65536,

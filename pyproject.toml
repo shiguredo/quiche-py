@@ -40,6 +40,7 @@ test = [
 # インストールできない。dev に含めず、通常ビルドの CI でのみ --group e2e で導入する。
 e2e = [
   "aioquic",  # E2E 用 QUIC エコーサーバー
+  "webtransport-py~=2026.1.0.dev5",  # E2E 用 WebTransport over HTTP/3 相互運用サーバー
 ]
 
 [build-system]
@@ -62,6 +63,7 @@ line-length = 100
 # エコーサーバー起動時の CancelledError 等を _startup_error 経由で再送出するため、
 # BaseException を広い except で受け取る必要がある。
 "tests/conftest.py" = ["BLE001"]
+"tests/test_webtransport_interop/conftest.py" = ["BLE001"]
 
 [tool.scikit-build]
 minimum-version = "1.0"
