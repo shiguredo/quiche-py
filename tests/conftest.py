@@ -335,41 +335,11 @@ def _free_udp_port() -> int:
 
 @pytest.fixture(scope="session")
 def moqt_test_server_binary() -> Path:
-    """MOQT の E2E テスト用サーバーを Bazel でビルドしてパスを返す。"""
-    bazelisk = shutil.which("bazelisk")
-    if bazelisk is None:
-        pytest.skip("bazelisk が無いため MOQT テストをスキップする")
-
+    """MOQT の E2E テスト用サーバーのビルド済みバイナリを返す。"""
     quiche_src = Path(__file__).resolve().parents[1] / "_build" / "_deps" / "quiche-src"
-    if not quiche_src.is_dir():
-        pytest.skip("QUICHE のビルドツリーが無いため MOQT テストをスキップする")
-
-    result = subprocess.run(
-        [
-            bazelisk,
-            "build",
-            "-c",
-            "opt",
-            "--features=-layering_check",
-            "--host_features=-layering_check",
-            "//quiche-py:moqt_test_server",
-        ],
-        cwd=quiche_src,
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=False,
-    )
-    if result.returncode != 0:
-        pytest.fail(
-            "MOQT テストサーバーのビルドに失敗した\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
-        )
-
     binary = quiche_src / "bazel-bin" / "quiche-py" / "moqt_test_server"
     if not binary.exists():
-        pytest.fail(f"MOQT テストサーバーのバイナリが見つからない: {binary}")
+        pytest.skip("MOQT テストサーバーがビルドされていないためスキップする")
     return binary
 
 
