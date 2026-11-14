@@ -21,10 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - name: ubuntu-24.04_x86_64
-            runs_on: ubuntu-24.04
-          - name: ubuntu-24.04_armv8
-            runs_on: ubuntu-24.04-arm
+          - name: ubuntu-26.04_x86_64
+            runs_on: ubuntu-26.04
+          - name: ubuntu-26.04_armv8
+            runs_on: ubuntu-26.04-arm
         python_version:
           - "3.14"
           - "3.14t"
@@ -138,13 +138,13 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - name: ubuntu-24.04_x86_64
-          - name: ubuntu-24.04_armv8
+          - name: ubuntu-26.04_x86_64
+          - name: ubuntu-26.04_armv8
           - name: macos-26_arm64
         python_version:
           - "3.14"
           - "3.14t"
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     environment: pypi
     permissions:
@@ -165,7 +165,7 @@ jobs:
     needs:
       - build_ubuntu
       - build_macos
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

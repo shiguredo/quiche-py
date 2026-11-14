@@ -51,8 +51,8 @@ C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所
 
 ## プラットフォーム
 
-- Ubuntu 24.04 LTS x86_64
-- Ubuntu 24.04 LTS arm64
+- Ubuntu 26.04 LTS x86_64
+- Ubuntu 26.04 LTS arm64
 - macOS 26 arm64
 
 ## 使い方
