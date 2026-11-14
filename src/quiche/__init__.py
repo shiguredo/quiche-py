@@ -10,8 +10,11 @@ from .quiche_ext import (
     Http3Client,
     Http3Response,
     QuicClient,
+    QuicStats,
     QuicStream,
     WebTransportClient,
+    WebTransportDatagramStats,
+    WebTransportSessionStats,
     WebTransportStream,
     version,
 )
@@ -25,8 +28,11 @@ __all__ = [
     "Http3Client",
     "Http3Response",
     "QuicClient",
+    "QuicStats",
     "QuicStream",
     "WebTransportClient",
+    "WebTransportDatagramStats",
+    "WebTransportSessionStats",
     "WebTransportStream",
     "version",
 ]

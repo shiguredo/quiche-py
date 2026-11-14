@@ -1,9 +1,11 @@
 #include "quiche_glue.h"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <stdexcept>
 #include <vector>
@@ -50,6 +52,39 @@ nb::bytes BytesFromBuffer(const char* data, size_t size) {
   return nb::bytes(data, size);
 }
 
+// None の引数は QUICHE_PY_CONFIG_UNSET として扱い、既存の設定を変更しない。
+quiche_py_config MakeConfig(
+    const std::optional<uint64_t>& max_idle_timeout_ms,
+    const std::optional<uint64_t>& initial_max_data,
+    const std::optional<uint64_t>& initial_max_stream_data_bidi_local,
+    const std::optional<uint64_t>& initial_max_stream_data_bidi_remote,
+    const std::optional<uint64_t>& initial_max_stream_data_uni,
+    const std::optional<uint64_t>& max_ack_delay_ms,
+    const std::optional<uint64_t>& min_ack_delay_us,
+    const std::optional<uint64_t>& active_connection_id_limit,
+    const std::optional<uint64_t>& max_datagram_frame_size) {
+  quiche_py_config config{};
+  config.max_idle_timeout_ms =
+      max_idle_timeout_ms.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.initial_max_data =
+      initial_max_data.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.initial_max_stream_data_bidi_local =
+      initial_max_stream_data_bidi_local.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.initial_max_stream_data_bidi_remote =
+      initial_max_stream_data_bidi_remote.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.initial_max_stream_data_uni =
+      initial_max_stream_data_uni.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.max_ack_delay_ms =
+      max_ack_delay_ms.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.min_ack_delay_us =
+      min_ack_delay_us.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.active_connection_id_limit =
+      active_connection_id_limit.value_or(QUICHE_PY_CONFIG_UNSET);
+  config.max_datagram_frame_size =
+      max_datagram_frame_size.value_or(QUICHE_PY_CONFIG_UNSET);
+  return config;
+}
+
 [[noreturn]] void RaisePythonException(PyObject* exception_type,
                                        const std::string& message) {
   PyErr_SetString(exception_type, message.c_str());
@@ -68,6 +103,8 @@ class PyQuicStream {
 
   nb::object read(size_t max_bytes);
   bool write(const nb::bytes& data, bool fin = false);
+  bool atomic_write(const nb::bytes& data, bool fin = false);
+  void set_priority(uint32_t send_group_id, uint32_t send_order);
   void reset(uint32_t error_code);
   void stop_sending(uint32_t error_code);
   bool can_write() const;
@@ -124,6 +161,65 @@ class PyQuicClient {
       return;
     }
     ThrowIfNotOk("failed to process an incoming packet", status);
+  }
+
+  // ハンドシェイク開始前に接続設定を反映する。
+  void configure(const std::optional<uint64_t>& max_idle_timeout_ms = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_data = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_bidi_local = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_bidi_remote = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_uni = std::nullopt,
+                 const std::optional<uint64_t>& max_ack_delay_ms = std::nullopt,
+                 const std::optional<uint64_t>& min_ack_delay_us = std::nullopt,
+                 const std::optional<uint64_t>& active_connection_id_limit = std::nullopt,
+                 const std::optional<uint64_t>& max_datagram_frame_size = std::nullopt) {
+    quiche_py_config config = MakeConfig(
+        max_idle_timeout_ms, initial_max_data,
+        initial_max_stream_data_bidi_local, initial_max_stream_data_bidi_remote,
+        initial_max_stream_data_uni, max_ack_delay_ms, min_ack_delay_us,
+        active_connection_id_limit, max_datagram_frame_size);
+    ThrowIfNotOk("failed to configure the QUIC client",
+                 api_.client_configure(handle_, &config));
+  }
+
+  // 受信パケットをまとめて状態機械へ流し込む。
+  void receive_packets(const nb::list& packets) {
+    std::vector<std::string> payloads;
+    payloads.reserve(packets.size());
+    for (nb::handle item : packets) {
+      nb::bytes bytes = nb::cast<nb::bytes>(item);
+      payloads.push_back(BytesToString(bytes));
+    }
+    std::vector<const uint8_t*> data;
+    std::vector<size_t> data_lengths;
+    data.reserve(payloads.size());
+    data_lengths.reserve(payloads.size());
+    for (const std::string& payload : payloads) {
+      data.push_back(reinterpret_cast<const uint8_t*>(payload.data()));
+      data_lengths.push_back(payload.size());
+    }
+    quiche_py_status status = api_.client_receive_packets(
+        handle_, data.data(), data_lengths.data(), data.size());
+    if (status == QUICHE_PY_STATUS_CLOSED) {
+      return;
+    }
+    ThrowIfNotOk("failed to process incoming packets", status);
+  }
+
+  nb::object stats() {
+    quiche_py_connection_stats stats{};
+    if (!api_.client_stats(handle_, &stats)) {
+      return nb::none();
+    }
+    return nb::cast(stats);
+  }
+
+  nb::object socket_packets_dropped() const {
+    uint64_t packets_dropped = 0;
+    if (!api_.client_socket_packets_dropped(handle_, &packets_dropped)) {
+      return nb::none();
+    }
+    return nb::cast(packets_dropped);
   }
 
   nb::object next_send() {
@@ -315,6 +411,24 @@ bool PyQuicStream::write(const nb::bytes& data, bool fin) {
   return true;
 }
 
+bool PyQuicStream::atomic_write(const nb::bytes& data, bool fin) {
+  std::string payload = BytesToString(data);
+  quiche_py_status status = client_->api().client_write_stream_atomic(
+      client_->handle(), stream_id_,
+      reinterpret_cast<const uint8_t*>(payload.data()), payload.size(), fin);
+  if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+    return false;
+  }
+  client_->ThrowIfNotOk("failed to atomically write to a QUIC stream", status);
+  return true;
+}
+
+void PyQuicStream::set_priority(uint32_t send_group_id, uint32_t send_order) {
+  quiche_py_status status = client_->api().client_stream_set_priority(
+      client_->handle(), stream_id_, send_group_id, send_order);
+  client_->ThrowIfNotOk("failed to set the QUIC stream priority", status);
+}
+
 void PyQuicStream::reset(uint32_t error_code) {
   quiche_py_status status =
       client_->api().client_reset_stream(client_->handle(), stream_id_,
@@ -428,6 +542,92 @@ class PyHttp3Client {
       return;
     }
     ThrowIfNotOk("failed to process an incoming packet", status);
+  }
+
+  void configure(const std::optional<uint64_t>& max_idle_timeout_ms = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_data = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_bidi_local = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_bidi_remote = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_uni = std::nullopt,
+                 const std::optional<uint64_t>& max_ack_delay_ms = std::nullopt,
+                 const std::optional<uint64_t>& min_ack_delay_us = std::nullopt,
+                 const std::optional<uint64_t>& active_connection_id_limit = std::nullopt,
+                 const std::optional<uint64_t>& max_datagram_frame_size = std::nullopt) {
+    quiche_py_config config = MakeConfig(
+        max_idle_timeout_ms, initial_max_data,
+        initial_max_stream_data_bidi_local, initial_max_stream_data_bidi_remote,
+        initial_max_stream_data_uni, max_ack_delay_ms, min_ack_delay_us,
+        active_connection_id_limit, max_datagram_frame_size);
+    ThrowIfNotOk("failed to configure the HTTP/3 client",
+                 api_.h3_client_configure(handle_, &config));
+  }
+
+  void receive_packets(const nb::list& packets) {
+    std::vector<std::string> payloads;
+    payloads.reserve(packets.size());
+    for (nb::handle item : packets) {
+      nb::bytes bytes = nb::cast<nb::bytes>(item);
+      payloads.push_back(BytesToString(bytes));
+    }
+    std::vector<const uint8_t*> data;
+    std::vector<size_t> data_lengths;
+    data.reserve(payloads.size());
+    data_lengths.reserve(payloads.size());
+    for (const std::string& payload : payloads) {
+      data.push_back(reinterpret_cast<const uint8_t*>(payload.data()));
+      data_lengths.push_back(payload.size());
+    }
+    quiche_py_status status = api_.h3_client_receive_packets(
+        handle_, data.data(), data_lengths.data(), data.size());
+    if (status == QUICHE_PY_STATUS_CLOSED) {
+      return;
+    }
+    ThrowIfNotOk("failed to process incoming packets", status);
+  }
+
+  nb::object stats() {
+    quiche_py_connection_stats stats{};
+    if (!api_.h3_client_stats(handle_, &stats)) {
+      return nb::none();
+    }
+    return nb::cast(stats);
+  }
+
+  nb::object socket_packets_dropped() const {
+    uint64_t packets_dropped = 0;
+    if (!api_.h3_client_socket_packets_dropped(handle_, &packets_dropped)) {
+      return nb::none();
+    }
+    return nb::cast(packets_dropped);
+  }
+
+  bool settings_received() const {
+    return api_.h3_client_settings_received(handle_);
+  }
+
+  nb::dict settings() const {
+    nb::dict values;
+    size_t count = api_.h3_client_setting_count(handle_);
+    for (size_t index = 0; index < count; ++index) {
+      uint64_t identifier = 0;
+      uint64_t value = 0;
+      if (api_.h3_client_setting_at(handle_, index, &identifier, &value)) {
+        values[nb::cast(identifier)] = nb::cast(value);
+      }
+    }
+    return values;
+  }
+
+  nb::list settings_wire_order() const {
+    nb::list order;
+    size_t count = api_.h3_client_settings_wire_order_count(handle_);
+    for (size_t index = 0; index < count; ++index) {
+      uint64_t identifier = 0;
+      if (api_.h3_client_settings_wire_order_at(handle_, index, &identifier)) {
+        order.append(nb::cast(identifier));
+      }
+    }
+    return order;
   }
 
   nb::object next_send() {
@@ -577,6 +777,8 @@ class PyWebTransportStream {
 
   nb::object read(size_t max_bytes);
   bool write(const nb::bytes& data, bool fin = false);
+  bool atomic_write(const nb::bytes& data, bool fin = false);
+  void set_priority(uint32_t send_group_id, uint32_t send_order);
   void reset(uint32_t error_code);
   void stop_sending(uint32_t error_code);
   bool can_write() const;
@@ -630,6 +832,91 @@ class PyWebTransportClient {
       return;
     }
     ThrowIfNotOk("failed to process an incoming packet", status);
+  }
+
+  void configure(const std::optional<uint64_t>& max_idle_timeout_ms = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_data = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_bidi_local = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_bidi_remote = std::nullopt,
+                 const std::optional<uint64_t>& initial_max_stream_data_uni = std::nullopt,
+                 const std::optional<uint64_t>& max_ack_delay_ms = std::nullopt,
+                 const std::optional<uint64_t>& min_ack_delay_us = std::nullopt,
+                 const std::optional<uint64_t>& active_connection_id_limit = std::nullopt,
+                 const std::optional<uint64_t>& max_datagram_frame_size = std::nullopt) {
+    quiche_py_config config = MakeConfig(
+        max_idle_timeout_ms, initial_max_data,
+        initial_max_stream_data_bidi_local, initial_max_stream_data_bidi_remote,
+        initial_max_stream_data_uni, max_ack_delay_ms, min_ack_delay_us,
+        active_connection_id_limit, max_datagram_frame_size);
+    ThrowIfNotOk("failed to configure the WebTransport client",
+                 api_.wt_client_configure(handle_, &config));
+  }
+
+  void receive_packets(const nb::list& packets) {
+    std::vector<std::string> payloads;
+    payloads.reserve(packets.size());
+    for (nb::handle item : packets) {
+      nb::bytes bytes = nb::cast<nb::bytes>(item);
+      payloads.push_back(BytesToString(bytes));
+    }
+    std::vector<const uint8_t*> data;
+    std::vector<size_t> data_lengths;
+    data.reserve(payloads.size());
+    data_lengths.reserve(payloads.size());
+    for (const std::string& payload : payloads) {
+      data.push_back(reinterpret_cast<const uint8_t*>(payload.data()));
+      data_lengths.push_back(payload.size());
+    }
+    quiche_py_status status = api_.wt_client_receive_packets(
+        handle_, data.data(), data_lengths.data(), data.size());
+    if (status == QUICHE_PY_STATUS_CLOSED) {
+      return;
+    }
+    ThrowIfNotOk("failed to process incoming packets", status);
+  }
+
+  nb::object stats() {
+    quiche_py_connection_stats stats{};
+    if (!api_.wt_client_stats(handle_, &stats)) {
+      return nb::none();
+    }
+    return nb::cast(stats);
+  }
+
+  nb::object socket_packets_dropped() const {
+    uint64_t packets_dropped = 0;
+    if (!api_.wt_client_socket_packets_dropped(handle_, &packets_dropped)) {
+      return nb::none();
+    }
+    return nb::cast(packets_dropped);
+  }
+
+  nb::object session_stats() {
+    quiche_py_wt_session_stats stats{};
+    if (!api_.wt_client_session_stats(handle_, &stats)) {
+      return nb::none();
+    }
+    return nb::cast(stats);
+  }
+
+  nb::object datagram_stats() {
+    quiche_py_wt_datagram_stats stats{};
+    if (!api_.wt_client_datagram_stats(handle_, &stats)) {
+      return nb::none();
+    }
+    return nb::cast(stats);
+  }
+
+  bool is_draining() const { return api_.wt_client_is_draining(handle_); }
+
+  void notify_draining() { api_.wt_client_notify_draining(handle_); }
+
+  nb::object protocol() const {
+    const char* protocol = api_.wt_client_protocol(handle_);
+    if (protocol == nullptr) {
+      return nb::none();
+    }
+    return nb::cast(std::string(protocol));
   }
 
   nb::object next_send() {
@@ -856,6 +1143,27 @@ bool PyWebTransportStream::write(const nb::bytes& data, bool fin) {
   return true;
 }
 
+bool PyWebTransportStream::atomic_write(const nb::bytes& data, bool fin) {
+  std::string payload = BytesToString(data);
+  quiche_py_status status = client_->api().wt_client_write_stream_atomic(
+      client_->handle(), stream_id_,
+      reinterpret_cast<const uint8_t*>(payload.data()), payload.size(), fin);
+  if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+    return false;
+  }
+  client_->ThrowIfNotOk("failed to atomically write to a WebTransport stream",
+                        status);
+  return true;
+}
+
+void PyWebTransportStream::set_priority(uint32_t send_group_id,
+                                        uint32_t send_order) {
+  quiche_py_status status = client_->api().wt_client_stream_set_priority(
+      client_->handle(), stream_id_, send_group_id, send_order);
+  client_->ThrowIfNotOk("failed to set the WebTransport stream priority",
+                        status);
+}
+
 void PyWebTransportStream::reset(uint32_t error_code) {
   client_->ThrowIfNotOk(
       "failed to reset a WebTransport stream",
@@ -899,6 +1207,13 @@ NB_MODULE(quiche_ext, m) {
            nb::arg("fin") = false,
            "Write bytes to the stream. Returns False when the stream is "
            "currently write-blocked.")
+      .def("atomic_write", &PyQuicStream::atomic_write, nb::lock_self(),
+           nb::arg("data"), nb::arg("fin") = false,
+           "Atomically write bytes to the stream. Returns False when flow "
+           "control credit is insufficient.")
+      .def("set_priority", &PyQuicStream::set_priority, nb::lock_self(),
+           nb::arg("send_group_id"), nb::arg("send_order"),
+           "Set the WebTransport send group and send order of the stream.")
       .def("reset", &PyQuicStream::reset, nb::lock_self(),
            nb::arg("error_code") = 0,
            "Reset the stream with an application-defined error code.")
@@ -923,6 +1238,21 @@ NB_MODULE(quiche_ext, m) {
       .def("receive_packet", &PyQuicClient::receive_packet, nb::lock_self(),
            nb::arg("data"),
            "Feed an inbound UDP datagram into the QUIC state machine.")
+      .def("receive_packets", &PyQuicClient::receive_packets, nb::lock_self(),
+           nb::arg("packets"),
+           "Feed a batch of inbound UDP datagrams into the QUIC state machine.")
+      .def("configure", &PyQuicClient::configure, nb::lock_self(),
+           nb::kw_only(),
+           nb::arg("max_idle_timeout_ms") = nb::none(),
+           nb::arg("initial_max_data") = nb::none(),
+           nb::arg("initial_max_stream_data_bidi_local") = nb::none(),
+           nb::arg("initial_max_stream_data_bidi_remote") = nb::none(),
+           nb::arg("initial_max_stream_data_uni") = nb::none(),
+           nb::arg("max_ack_delay_ms") = nb::none(),
+           nb::arg("min_ack_delay_us") = nb::none(),
+           nb::arg("active_connection_id_limit") = nb::none(),
+           nb::arg("max_datagram_frame_size") = nb::none(),
+           "Set QUIC transport parameters before starting the handshake.")
       .def("next_send", &PyQuicClient::next_send, nb::lock_self(),
            "Return the next outgoing UDP datagram, or None when the send queue "
            "is empty.")
@@ -964,6 +1294,12 @@ NB_MODULE(quiche_ext, m) {
            "available.")
       .def("is_connected", &PyQuicClient::is_connected, nb::lock_self(),
            "Whether the QUIC connection is established and ready to use.")
+      .def("stats", &PyQuicClient::stats, nb::lock_self(),
+           "Return QUIC connection statistics, or None before the session is "
+           "created.")
+      .def("socket_packets_dropped", &PyQuicClient::socket_packets_dropped,
+           nb::lock_self(),
+           "Return socket buffer overflow drops, or None when unavailable.")
       .def("max_datagram_size", &PyQuicClient::max_datagram_size,
            nb::lock_self(),
            "Return the currently negotiated maximum QUIC datagram payload size.")
@@ -985,12 +1321,34 @@ NB_MODULE(quiche_ext, m) {
       .def("start", &PyHttp3Client::start, nb::lock_self())
       .def("receive_packet", &PyHttp3Client::receive_packet, nb::lock_self(),
            nb::arg("data"))
+      .def("receive_packets", &PyHttp3Client::receive_packets, nb::lock_self(),
+           nb::arg("packets"))
+      .def("configure", &PyHttp3Client::configure, nb::lock_self(),
+           nb::kw_only(),
+           nb::arg("max_idle_timeout_ms") = nb::none(),
+           nb::arg("initial_max_data") = nb::none(),
+           nb::arg("initial_max_stream_data_bidi_local") = nb::none(),
+           nb::arg("initial_max_stream_data_bidi_remote") = nb::none(),
+           nb::arg("initial_max_stream_data_uni") = nb::none(),
+           nb::arg("max_ack_delay_ms") = nb::none(),
+           nb::arg("min_ack_delay_us") = nb::none(),
+           nb::arg("active_connection_id_limit") = nb::none(),
+           nb::arg("max_datagram_frame_size") = nb::none(),
+           "Set QUIC transport parameters before starting the handshake.")
       .def("next_send", &PyHttp3Client::next_send, nb::lock_self())
       .def("next_timeout_ms", &PyHttp3Client::next_timeout_ms, nb::lock_self())
       .def("handle_timeout", &PyHttp3Client::handle_timeout, nb::lock_self())
       .def("close", &PyHttp3Client::close, nb::lock_self(),
            nb::arg("error_code") = 0, nb::arg("reason") = "")
       .def("is_connected", &PyHttp3Client::is_connected, nb::lock_self())
+      .def("stats", &PyHttp3Client::stats, nb::lock_self())
+      .def("socket_packets_dropped", &PyHttp3Client::socket_packets_dropped,
+           nb::lock_self())
+      .def("settings_received", &PyHttp3Client::settings_received,
+           nb::lock_self())
+      .def("settings", &PyHttp3Client::settings, nb::lock_self())
+      .def("settings_wire_order", &PyHttp3Client::settings_wire_order,
+           nb::lock_self())
       .def("submit_request", &PyHttp3Client::submit_request, nb::lock_self(),
            nb::arg("headers"), nb::arg("body") = nb::bytes(""),
            nb::arg("fin") = true,
@@ -1008,6 +1366,10 @@ NB_MODULE(quiche_ext, m) {
            nb::arg("max_bytes") = 65536)
       .def("write", &PyWebTransportStream::write, nb::lock_self(),
            nb::arg("data"), nb::arg("fin") = false)
+      .def("atomic_write", &PyWebTransportStream::atomic_write,
+           nb::lock_self(), nb::arg("data"), nb::arg("fin") = false)
+      .def("set_priority", &PyWebTransportStream::set_priority,
+           nb::lock_self(), nb::arg("send_group_id"), nb::arg("send_order"))
       .def("reset", &PyWebTransportStream::reset, nb::lock_self(),
            nb::arg("error_code") = 0)
       .def("stop_sending", &PyWebTransportStream::stop_sending, nb::lock_self(),
@@ -1023,6 +1385,20 @@ NB_MODULE(quiche_ext, m) {
       .def("start", &PyWebTransportClient::start, nb::lock_self())
       .def("receive_packet", &PyWebTransportClient::receive_packet,
            nb::lock_self(), nb::arg("data"))
+      .def("receive_packets", &PyWebTransportClient::receive_packets,
+           nb::lock_self(), nb::arg("packets"))
+      .def("configure", &PyWebTransportClient::configure, nb::lock_self(),
+           nb::kw_only(),
+           nb::arg("max_idle_timeout_ms") = nb::none(),
+           nb::arg("initial_max_data") = nb::none(),
+           nb::arg("initial_max_stream_data_bidi_local") = nb::none(),
+           nb::arg("initial_max_stream_data_bidi_remote") = nb::none(),
+           nb::arg("initial_max_stream_data_uni") = nb::none(),
+           nb::arg("max_ack_delay_ms") = nb::none(),
+           nb::arg("min_ack_delay_us") = nb::none(),
+           nb::arg("active_connection_id_limit") = nb::none(),
+           nb::arg("max_datagram_frame_size") = nb::none(),
+           "Set QUIC transport parameters before starting the handshake.")
       .def("next_send", &PyWebTransportClient::next_send, nb::lock_self())
       .def("next_timeout_ms", &PyWebTransportClient::next_timeout_ms,
            nb::lock_self())
@@ -1033,6 +1409,18 @@ NB_MODULE(quiche_ext, m) {
       .def("is_connected", &PyWebTransportClient::is_connected, nb::lock_self())
       .def("is_session_ready", &PyWebTransportClient::is_session_ready,
            nb::lock_self())
+      .def("stats", &PyWebTransportClient::stats, nb::lock_self())
+      .def("socket_packets_dropped",
+           &PyWebTransportClient::socket_packets_dropped, nb::lock_self())
+      .def("session_stats", &PyWebTransportClient::session_stats,
+           nb::lock_self())
+      .def("datagram_stats", &PyWebTransportClient::datagram_stats,
+           nb::lock_self())
+      .def("is_draining", &PyWebTransportClient::is_draining, nb::lock_self())
+      .def("notify_draining", &PyWebTransportClient::notify_draining,
+           nb::lock_self())
+      .def_prop_ro("protocol", &PyWebTransportClient::protocol,
+                   nb::lock_self())
       .def("connect_session", &PyWebTransportClient::connect_session,
            nb::lock_self(), nb::arg("path"), nb::arg("headers") = nb::none(),
            "Send CONNECT webtransport. Returns False when blocked.")
@@ -1056,6 +1444,153 @@ NB_MODULE(quiche_ext, m) {
            nb::lock_self())
       .def_prop_ro("last_error", &PyWebTransportClient::last_error,
                    nb::lock_self());
+
+  nb::class_<quiche_py_connection_stats>(m, "QuicStats")
+      .def_ro("bytes_sent", &quiche_py_connection_stats::bytes_sent)
+      .def_ro("packets_sent", &quiche_py_connection_stats::packets_sent)
+      .def_ro("packets_sent_by_dispatcher",
+              &quiche_py_connection_stats::packets_sent_by_dispatcher)
+      .def_ro("packets_discarded",
+              &quiche_py_connection_stats::packets_discarded)
+      .def_ro("stream_bytes_sent",
+              &quiche_py_connection_stats::stream_bytes_sent)
+      .def_ro("bytes_received", &quiche_py_connection_stats::bytes_received)
+      .def_ro("packets_received",
+              &quiche_py_connection_stats::packets_received)
+      .def_ro("packets_processed",
+              &quiche_py_connection_stats::packets_processed)
+      .def_ro("stream_bytes_received",
+              &quiche_py_connection_stats::stream_bytes_received)
+      .def_ro("bytes_retransmitted",
+              &quiche_py_connection_stats::bytes_retransmitted)
+      .def_ro("packets_retransmitted",
+              &quiche_py_connection_stats::packets_retransmitted)
+      .def_ro("bytes_spuriously_retransmitted",
+              &quiche_py_connection_stats::bytes_spuriously_retransmitted)
+      .def_ro("packets_spuriously_retransmitted",
+              &quiche_py_connection_stats::packets_spuriously_retransmitted)
+      .def_ro("packets_lost", &quiche_py_connection_stats::packets_lost)
+      .def_ro("packets_spuriously_detected_lost",
+              &quiche_py_connection_stats::packets_spuriously_detected_lost)
+      .def_ro("packets_dropped",
+              &quiche_py_connection_stats::packets_dropped)
+      .def_ro("min_rtt_us", &quiche_py_connection_stats::min_rtt_us)
+      .def_ro("srtt_us", &quiche_py_connection_stats::srtt_us)
+      .def_ro("cwnd_bootstrapping_rtt_us",
+              &quiche_py_connection_stats::cwnd_bootstrapping_rtt_us)
+      .def_ro("egress_mtu", &quiche_py_connection_stats::egress_mtu)
+      .def_ro("max_egress_mtu", &quiche_py_connection_stats::max_egress_mtu)
+      .def_ro("ingress_mtu", &quiche_py_connection_stats::ingress_mtu)
+      .def_ro("estimated_bandwidth_bps",
+              &quiche_py_connection_stats::estimated_bandwidth_bps)
+      .def_ro("packets_reordered",
+              &quiche_py_connection_stats::packets_reordered)
+      .def_ro("max_sequence_reordering",
+              &quiche_py_connection_stats::max_sequence_reordering)
+      .def_ro("max_time_reordering_us",
+              &quiche_py_connection_stats::max_time_reordering_us)
+      .def_ro("num_coalesced_packets_received",
+              &quiche_py_connection_stats::num_coalesced_packets_received)
+      .def_ro("num_coalesced_packets_processed",
+              &quiche_py_connection_stats::num_coalesced_packets_processed)
+      .def_ro("num_ack_aggregation_epochs",
+              &quiche_py_connection_stats::num_ack_aggregation_epochs)
+      .def_ro("num_failed_authentication_packets_received",
+              &quiche_py_connection_stats::num_failed_authentication_packets_received)
+      .def_ro("num_tls_server_zero_rtt_packets_received_after_discarding_decrypter",
+              &quiche_py_connection_stats::num_tls_server_zero_rtt_packets_received_after_discarding_decrypter)
+      .def_ro("num_ecn_marks_ect0",
+              &quiche_py_connection_stats::num_ecn_marks_ect0)
+      .def_ro("num_ecn_marks_ect1",
+              &quiche_py_connection_stats::num_ecn_marks_ect1)
+      .def_ro("num_ecn_marks_ce",
+              &quiche_py_connection_stats::num_ecn_marks_ce)
+      .def_ro("num_ack_frames_sent_with_ecn",
+              &quiche_py_connection_stats::num_ack_frames_sent_with_ecn)
+      .def_ro("application_data_acked",
+              &quiche_py_connection_stats::application_data_acked)
+      .def_ro("application_data_packets_acked",
+              &quiche_py_connection_stats::application_data_packets_acked)
+      .def_ro("application_data_packets_with_receive_timestamps_acked",
+              &quiche_py_connection_stats::application_data_packets_with_receive_timestamps_acked)
+      .def_ro("total_loss_detection_response_time",
+              &quiche_py_connection_stats::total_loss_detection_response_time)
+      .def_ro("slowstart_count",
+              &quiche_py_connection_stats::slowstart_count)
+      .def_ro("slowstart_num_rtts",
+              &quiche_py_connection_stats::slowstart_num_rtts)
+      .def_ro("slowstart_packets_sent",
+              &quiche_py_connection_stats::slowstart_packets_sent)
+      .def_ro("slowstart_bytes_sent",
+              &quiche_py_connection_stats::slowstart_bytes_sent)
+      .def_ro("slowstart_packets_lost",
+              &quiche_py_connection_stats::slowstart_packets_lost)
+      .def_ro("slowstart_bytes_lost",
+              &quiche_py_connection_stats::slowstart_bytes_lost)
+      .def_ro("bbr_num_cycles",
+              &quiche_py_connection_stats::bbr_num_cycles)
+      .def_ro("bbr_num_short_cycles_for_reno_coexistence",
+              &quiche_py_connection_stats::bbr_num_short_cycles_for_reno_coexistence)
+      .def_ro("crypto_retransmit_count",
+              &quiche_py_connection_stats::crypto_retransmit_count)
+      .def_ro("loss_timeout_count",
+              &quiche_py_connection_stats::loss_timeout_count)
+      .def_ro("pto_count", &quiche_py_connection_stats::pto_count)
+      .def_ro("tcp_loss_events",
+              &quiche_py_connection_stats::tcp_loss_events)
+      .def_ro("blocked_frames_received",
+              &quiche_py_connection_stats::blocked_frames_received)
+      .def_ro("blocked_frames_sent",
+              &quiche_py_connection_stats::blocked_frames_sent)
+      .def_ro("num_connectivity_probing_received",
+              &quiche_py_connection_stats::num_connectivity_probing_received)
+      .def_ro("num_path_response_received",
+              &quiche_py_connection_stats::num_path_response_received)
+      .def_ro("max_consecutive_rto_with_forward_progress",
+              &quiche_py_connection_stats::max_consecutive_rto_with_forward_progress)
+      .def_ro("num_amplification_throttling",
+              &quiche_py_connection_stats::num_amplification_throttling)
+      .def_ro("key_update_count",
+              &quiche_py_connection_stats::key_update_count)
+      .def_ro("ping_frames_sent",
+              &quiche_py_connection_stats::ping_frames_sent)
+      .def_ro("num_new_connection_id_sent",
+              &quiche_py_connection_stats::num_new_connection_id_sent)
+      .def_ro("num_retire_connection_id_sent",
+              &quiche_py_connection_stats::num_retire_connection_id_sent)
+      .def_ro("num_peer_migration_to_proactively_validated_address",
+              &quiche_py_connection_stats::num_peer_migration_to_proactively_validated_address)
+      .def_ro("num_reverse_path_validation_upon_migration",
+              &quiche_py_connection_stats::num_reverse_path_validation_upon_migration)
+      .def_ro("num_validated_peer_migration",
+              &quiche_py_connection_stats::num_validated_peer_migration)
+      .def_ro("num_invalid_peer_migration",
+              &quiche_py_connection_stats::num_invalid_peer_migration)
+      .def_ro("num_peer_migration_while_validating_default_path",
+              &quiche_py_connection_stats::num_peer_migration_while_validating_default_path)
+      .def_ro("first_decrypted_packet",
+              &quiche_py_connection_stats::first_decrypted_packet)
+      .def_ro("connection_creation_time_us",
+              &quiche_py_connection_stats::connection_creation_time_us)
+      .def_ro("handshake_completion_time_us",
+              &quiche_py_connection_stats::handshake_completion_time_us);
+
+  nb::class_<quiche_py_wt_session_stats>(m, "WebTransportSessionStats")
+      .def_ro("min_rtt_us", &quiche_py_wt_session_stats::min_rtt_us)
+      .def_ro("smoothed_rtt_us",
+              &quiche_py_wt_session_stats::smoothed_rtt_us)
+      .def_ro("rtt_variation_us",
+              &quiche_py_wt_session_stats::rtt_variation_us)
+      .def_ro("application_bytes_acknowledged",
+              &quiche_py_wt_session_stats::application_bytes_acknowledged)
+      .def_ro("estimated_send_rate_bps",
+              &quiche_py_wt_session_stats::estimated_send_rate_bps);
+
+  nb::class_<quiche_py_wt_datagram_stats>(m, "WebTransportDatagramStats")
+      .def_ro("expired_outgoing",
+              &quiche_py_wt_datagram_stats::expired_outgoing)
+      .def_ro("lost_outgoing",
+              &quiche_py_wt_datagram_stats::lost_outgoing);
 
   m.def("version",
         [] { return std::string(Api().supported_versions_sample()); },

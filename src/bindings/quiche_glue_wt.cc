@@ -1,6 +1,8 @@
 #include "quiche_glue.h"
+#include "quiche_glue_config.h"
 #include "quiche_glue_exports.h"
 #include "quiche_glue_sans_io.h"
+#include "quiche_glue_stats.h"
 
 #include <cstdint>
 #include <cstring>
@@ -79,6 +81,8 @@ class WtSessionVisitor : public webtransport::SessionVisitor {
 
   bool session_ready() const { return session_ready_; }
   bool session_closed() const { return session_closed_; }
+  bool draining() const { return draining_; }
+  void MarkDraining() { draining_ = true; }
   SessionErrorCode close_error_code() const { return close_error_code_; }
   const std::string& close_error_message() const {
     return close_error_message_;
@@ -97,6 +101,7 @@ class WtSessionVisitor : public webtransport::SessionVisitor {
  private:
   bool session_ready_ = false;
   bool session_closed_ = false;
+  bool draining_ = false;
   SessionErrorCode close_error_code_ = 0;
   std::string close_error_message_;
   std::deque<std::string> received_datagrams_;
@@ -237,6 +242,26 @@ struct quiche_py_wt_client {
         std::move(proof_verifier));
   }
 
+  // ハンドシェイク開始前に WebTransport 接続の QUIC 設定を反映する。
+  quiche_py_status Configure(const quiche_py_config* config) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ResetRuntimeError();
+    if (config == nullptr) {
+      SetError("config must not be null");
+      return QUICHE_PY_STATUS_INVALID_ARGUMENT;
+    }
+    quiche_py_status status = EnsureClient();
+    if (status != QUICHE_PY_STATUS_OK) {
+      return status;
+    }
+    if (client_->initialized()) {
+      SetError("config must be set before the handshake starts");
+      return QUICHE_PY_STATUS_INVALID_ARGUMENT;
+    }
+    quiche_py::ApplyConfig(client_->config(), *config);
+    return QUICHE_PY_STATUS_OK;
+  }
+
   quiche_py_status Start() {
     std::lock_guard<std::mutex> lock(mutex_);
     ResetRuntimeError();
@@ -265,31 +290,24 @@ struct quiche_py_wt_client {
   quiche_py_status ReceivePacket(const uint8_t* data, size_t data_len) {
     std::lock_guard<std::mutex> lock(mutex_);
     ResetRuntimeError();
-    if (data == nullptr && data_len > 0) {
-      SetError("data must not be null when data_len > 0");
+    return ReceivePacketLocked(data, data_len);
+  }
+
+  quiche_py_status ReceivePackets(const uint8_t* const* data,
+                                  const size_t* data_lengths,
+                                  size_t packet_count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ResetRuntimeError();
+    if (packet_count > 0 && (data == nullptr || data_lengths == nullptr)) {
+      SetError("data and data_lengths must not be null when packet_count > 0");
       return QUICHE_PY_STATUS_INVALID_ARGUMENT;
     }
-    if (data_len == 0) {
-      return QUICHE_PY_STATUS_OK;
-    }
-    quiche_py_status status = EnsureClient();
-    if (status != QUICHE_PY_STATUS_OK) {
-      return status;
-    }
-    quic::QuicSession* session = client_->session();
-    if (session == nullptr) {
-      SetError("handshake has not been started");
-      return QUICHE_PY_STATUS_ERROR;
-    }
-    quic::QuicReceivedPacket packet(reinterpret_cast<const char*>(data),
-                                    data_len,
-                                    quic::QuicDefaultClock::Get()->Now());
-    session->ProcessUdpPacket(client_->network_helper()->GetLatestClientAddress(),
-                              server_address_, packet);
-    if (!client_->connected()) {
-      PopulateClosedErrorIfNeeded();
-      SetErrorIfEmpty("connection closed while processing a packet");
-      return QUICHE_PY_STATUS_CLOSED;
+    for (size_t index = 0; index < packet_count; ++index) {
+      quiche_py_status status =
+          ReceivePacketLocked(data[index], data_lengths[index]);
+      if (status != QUICHE_PY_STATUS_OK) {
+        return status;
+      }
     }
     return QUICHE_PY_STATUS_OK;
   }
@@ -384,6 +402,82 @@ struct quiche_py_wt_client {
     return session_visitor_ != nullptr && session_visitor_->session_ready();
   }
 
+  // WebTransport の基盤 QUIC 接続の統計を取得する。
+  bool GetStats(quiche_py_connection_stats* stats) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stats == nullptr || client_ == nullptr ||
+        client_->session() == nullptr) {
+      return false;
+    }
+    quic::QuicConnection* connection = client_->session()->connection();
+    if (connection == nullptr) {
+      return false;
+    }
+    quiche_py::FillConnectionStats(connection->GetStats(), stats);
+    return true;
+  }
+
+  bool GetSocketPacketsDropped(uint64_t* packets_dropped) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (packets_dropped == nullptr || client_ == nullptr) {
+      return false;
+    }
+    std::optional<quic::QuicPacketCount> dropped = client_->packets_dropped();
+    if (!dropped.has_value()) {
+      return false;
+    }
+    *packets_dropped = *dropped;
+    return true;
+  }
+
+  // W3C WebTransport Stats 相当のセッション統計を取得する。
+  bool GetSessionStats(quiche_py_wt_session_stats* stats) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stats == nullptr || web_transport_ == nullptr) {
+      return false;
+    }
+    quiche_py::FillSessionStats(web_transport_->GetSessionStats(), stats);
+    return true;
+  }
+
+  // WebTransport の datagram 統計を取得する。
+  bool GetDatagramStats(quiche_py_wt_datagram_stats* stats) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stats == nullptr || web_transport_ == nullptr) {
+      return false;
+    }
+    quiche_py::FillDatagramStats(web_transport_->GetDatagramStats(), stats);
+    return true;
+  }
+
+  bool IsDraining() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return session_visitor_ != nullptr && session_visitor_->draining();
+  }
+
+  void NotifyDraining() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (web_transport_ != nullptr) {
+      web_transport_->NotifySessionDraining();
+    }
+  }
+
+  // ネゴシエーション済みサブプロトコルを返す。無ければ nullptr。
+  const char* Protocol() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    static thread_local std::string buffer;
+    if (web_transport_ == nullptr) {
+      return nullptr;
+    }
+    std::optional<std::string> protocol =
+        web_transport_->GetNegotiatedSubprotocol();
+    if (!protocol.has_value()) {
+      return nullptr;
+    }
+    buffer = *protocol;
+    return buffer.c_str();
+  }
+
   quiche_py_status ConnectSession(const char* path,
                                   const quiche_py_http3_header* extra_headers,
                                   size_t header_count) {
@@ -459,6 +553,8 @@ struct quiche_py_wt_client {
     auto visitor = std::make_unique<WtSessionVisitor>();
     session_visitor_ = visitor.get();
     web_transport_->SetVisitor(std::move(visitor));
+    web_transport_->SetOnDraining(
+        [visitor = session_visitor_] { visitor->MarkDraining(); });
     connect_requested_ = true;
     return QUICHE_PY_STATUS_OK;
   }
@@ -585,6 +681,56 @@ struct quiche_py_wt_client {
     return QUICHE_PY_STATUS_OK;
   }
 
+  // フロー制御の空きを確認してから書き込む all-or-nothing 版。
+  quiche_py_status WriteStreamAtomic(uint32_t stream_id, const uint8_t* data,
+                                     size_t data_len, bool fin) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ResetRuntimeError();
+    if (data == nullptr && data_len > 0) {
+      SetError("data must not be null when data_len > 0");
+      return QUICHE_PY_STATUS_INVALID_ARGUMENT;
+    }
+    if (data_len == 0 && !fin) {
+      SetError("empty write requires fin=true");
+      return QUICHE_PY_STATUS_INVALID_ARGUMENT;
+    }
+    Stream* stream = nullptr;
+    quiche_py_status status = RequireStream(stream_id, &stream);
+    if (status != QUICHE_PY_STATUS_OK) {
+      return status;
+    }
+    std::vector<quiche::QuicheMemSlice> slices;
+    if (data_len > 0) {
+      slices.push_back(quiche::QuicheMemSlice::Copy(BytesView(data, data_len)));
+    }
+    webtransport::StreamWriteOptions options;
+    options.set_send_fin(fin);
+    options.set_atomic_write(true);
+    absl::Status write_status = stream->Writev(absl::MakeSpan(slices), options);
+    if (!write_status.ok()) {
+      if (write_status.code() == absl::StatusCode::kUnavailable ||
+          write_status.code() == absl::StatusCode::kResourceExhausted) {
+        return QUICHE_PY_STATUS_WOULD_BLOCK;
+      }
+      SetError(write_status.ToString());
+      return QUICHE_PY_STATUS_ERROR;
+    }
+    return QUICHE_PY_STATUS_OK;
+  }
+
+  quiche_py_status SetStreamPriority(uint32_t stream_id, uint32_t send_group_id,
+                                     uint32_t send_order) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ResetRuntimeError();
+    Stream* stream = nullptr;
+    quiche_py_status status = RequireStream(stream_id, &stream);
+    if (status != QUICHE_PY_STATUS_OK) {
+      return status;
+    }
+    stream->SetPriority(webtransport::StreamPriority{send_group_id, send_order});
+    return QUICHE_PY_STATUS_OK;
+  }
+
   quiche_py_status ResetStream(uint32_t stream_id, uint32_t error_code) {
     std::lock_guard<std::mutex> lock(mutex_);
     ResetRuntimeError();
@@ -699,6 +845,37 @@ struct quiche_py_wt_client {
   const char* last_error() const { return last_error_.c_str(); }
 
  private:
+  // mutex_ を保持した状態で 1 パケットを処理する。
+  quiche_py_status ReceivePacketLocked(const uint8_t* data, size_t data_len) {
+    if (data == nullptr && data_len > 0) {
+      SetError("data must not be null when data_len > 0");
+      return QUICHE_PY_STATUS_INVALID_ARGUMENT;
+    }
+    if (data_len == 0) {
+      return QUICHE_PY_STATUS_OK;
+    }
+    quiche_py_status status = EnsureClient();
+    if (status != QUICHE_PY_STATUS_OK) {
+      return status;
+    }
+    quic::QuicSession* session = client_->session();
+    if (session == nullptr) {
+      SetError("handshake has not been started");
+      return QUICHE_PY_STATUS_ERROR;
+    }
+    quic::QuicReceivedPacket packet(reinterpret_cast<const char*>(data),
+                                    data_len,
+                                    quic::QuicDefaultClock::Get()->Now());
+    session->ProcessUdpPacket(client_->network_helper()->GetLatestClientAddress(),
+                              server_address_, packet);
+    if (!client_->connected()) {
+      PopulateClosedErrorIfNeeded();
+      SetErrorIfEmpty("connection closed while processing a packet");
+      return QUICHE_PY_STATUS_CLOSED;
+    }
+    return QUICHE_PY_STATUS_OK;
+  }
+
   quiche_py_status EnsureClient() {
     if (client_ == nullptr) {
       SetErrorIfEmpty("WebTransport client is not available");
@@ -930,6 +1107,75 @@ quiche_py_status quiche_py_wt_client_receive_datagram(
 
 size_t quiche_py_wt_client_max_datagram_size(quiche_py_wt_client* client) {
   return client == nullptr ? 0 : client->MaxDatagramSize();
+}
+
+quiche_py_status quiche_py_wt_client_configure(
+    quiche_py_wt_client* client, const quiche_py_config* config) {
+  return client == nullptr ? QUICHE_PY_STATUS_INVALID_ARGUMENT
+                           : client->Configure(config);
+}
+
+bool quiche_py_wt_client_stats(const quiche_py_wt_client* client,
+                               quiche_py_connection_stats* stats) {
+  // QuicConnection::GetStats() は統計を更新するため非 const。
+  return client != nullptr &&
+         const_cast<quiche_py_wt_client*>(client)->GetStats(stats);
+}
+
+bool quiche_py_wt_client_socket_packets_dropped(
+    const quiche_py_wt_client* client, uint64_t* packets_dropped) {
+  return client != nullptr &&
+         client->GetSocketPacketsDropped(packets_dropped);
+}
+
+quiche_py_status quiche_py_wt_client_receive_packets(
+    quiche_py_wt_client* client, const uint8_t* const* data,
+    const size_t* data_lengths, size_t packet_count) {
+  return client == nullptr
+             ? QUICHE_PY_STATUS_INVALID_ARGUMENT
+             : client->ReceivePackets(data, data_lengths, packet_count);
+}
+
+bool quiche_py_wt_client_session_stats(const quiche_py_wt_client* client,
+                                       quiche_py_wt_session_stats* stats) {
+  return client != nullptr &&
+         const_cast<quiche_py_wt_client*>(client)->GetSessionStats(stats);
+}
+
+bool quiche_py_wt_client_datagram_stats(const quiche_py_wt_client* client,
+                                        quiche_py_wt_datagram_stats* stats) {
+  return client != nullptr &&
+         const_cast<quiche_py_wt_client*>(client)->GetDatagramStats(stats);
+}
+
+bool quiche_py_wt_client_is_draining(const quiche_py_wt_client* client) {
+  return client != nullptr && client->IsDraining();
+}
+
+void quiche_py_wt_client_notify_draining(quiche_py_wt_client* client) {
+  if (client != nullptr) {
+    client->NotifyDraining();
+  }
+}
+
+const char* quiche_py_wt_client_protocol(const quiche_py_wt_client* client) {
+  return client == nullptr ? nullptr : client->Protocol();
+}
+
+quiche_py_status quiche_py_wt_client_write_stream_atomic(
+    quiche_py_wt_client* client, uint32_t stream_id, const uint8_t* data,
+    size_t data_len, bool fin) {
+  return client == nullptr
+             ? QUICHE_PY_STATUS_INVALID_ARGUMENT
+             : client->WriteStreamAtomic(stream_id, data, data_len, fin);
+}
+
+quiche_py_status quiche_py_wt_client_stream_set_priority(
+    quiche_py_wt_client* client, uint32_t stream_id, uint32_t send_group_id,
+    uint32_t send_order) {
+  return client == nullptr
+             ? QUICHE_PY_STATUS_INVALID_ARGUMENT
+             : client->SetStreamPriority(stream_id, send_group_id, send_order);
 }
 
 const char* quiche_py_wt_client_last_error(const quiche_py_wt_client* client) {

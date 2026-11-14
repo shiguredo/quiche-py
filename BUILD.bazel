@@ -17,8 +17,10 @@ cc_library(
     ],
     hdrs = [
         "src/bindings/quiche_glue.h",
+        "src/bindings/quiche_glue_config.h",
         "src/bindings/quiche_glue_exports.h",
         "src/bindings/quiche_glue_sans_io.h",
+        "src/bindings/quiche_glue_stats.h",
     ],
     includes = ["src/bindings"],
     # quiche_py_get_api の唯一の参照元は Bazel 外の nanobind 拡張 (quiche_ext) のため、

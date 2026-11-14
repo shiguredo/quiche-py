@@ -45,6 +45,26 @@ const uint8_t* quiche_py_h3_response_body(
     const quiche_py_http3_response* response, size_t* body_len);
 const char* quiche_py_h3_client_last_error(
     const quiche_py_http3_client* client);
+quiche_py_status quiche_py_h3_client_configure(
+    quiche_py_http3_client* client, const quiche_py_config* config);
+bool quiche_py_h3_client_stats(const quiche_py_http3_client* client,
+                               quiche_py_connection_stats* stats);
+bool quiche_py_h3_client_socket_packets_dropped(
+    const quiche_py_http3_client* client, uint64_t* packets_dropped);
+quiche_py_status quiche_py_h3_client_receive_packets(
+    quiche_py_http3_client* client, const uint8_t* const* data,
+    const size_t* data_lengths, size_t packet_count);
+bool quiche_py_h3_client_settings_received(
+    const quiche_py_http3_client* client);
+size_t quiche_py_h3_client_setting_count(
+    const quiche_py_http3_client* client);
+bool quiche_py_h3_client_setting_at(const quiche_py_http3_client* client,
+                                    size_t index, uint64_t* identifier,
+                                    uint64_t* value);
+size_t quiche_py_h3_client_settings_wire_order_count(
+    const quiche_py_http3_client* client);
+bool quiche_py_h3_client_settings_wire_order_at(
+    const quiche_py_http3_client* client, size_t index, uint64_t* identifier);
 
 quiche_py_wt_client* quiche_py_wt_client_create(
     const quiche_py_wt_client_options* options);
@@ -99,6 +119,28 @@ quiche_py_status quiche_py_wt_client_receive_datagram(
     size_t* bytes_read);
 size_t quiche_py_wt_client_max_datagram_size(quiche_py_wt_client* client);
 const char* quiche_py_wt_client_last_error(const quiche_py_wt_client* client);
+quiche_py_status quiche_py_wt_client_configure(
+    quiche_py_wt_client* client, const quiche_py_config* config);
+bool quiche_py_wt_client_stats(const quiche_py_wt_client* client,
+                               quiche_py_connection_stats* stats);
+bool quiche_py_wt_client_socket_packets_dropped(
+    const quiche_py_wt_client* client, uint64_t* packets_dropped);
+quiche_py_status quiche_py_wt_client_receive_packets(
+    quiche_py_wt_client* client, const uint8_t* const* data,
+    const size_t* data_lengths, size_t packet_count);
+bool quiche_py_wt_client_session_stats(const quiche_py_wt_client* client,
+                                       quiche_py_wt_session_stats* stats);
+bool quiche_py_wt_client_datagram_stats(const quiche_py_wt_client* client,
+                                        quiche_py_wt_datagram_stats* stats);
+bool quiche_py_wt_client_is_draining(const quiche_py_wt_client* client);
+void quiche_py_wt_client_notify_draining(quiche_py_wt_client* client);
+const char* quiche_py_wt_client_protocol(const quiche_py_wt_client* client);
+quiche_py_status quiche_py_wt_client_write_stream_atomic(
+    quiche_py_wt_client* client, uint32_t stream_id, const uint8_t* data,
+    size_t data_len, bool fin);
+quiche_py_status quiche_py_wt_client_stream_set_priority(
+    quiche_py_wt_client* client, uint32_t stream_id, uint32_t send_group_id,
+    uint32_t send_order);
 
 #ifdef __cplusplus
 }

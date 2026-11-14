@@ -72,6 +72,77 @@ class PrimitiveDriver:
                 self._client.handle_timeout()
 
 
+class _SansIoClient(Protocol):
+    """低レベルクライアントの共通操作。"""
+
+    def start(self) -> None: ...
+
+    def next_send(self) -> bytes | None: ...
+
+    def next_timeout_ms(self) -> int | None: ...
+
+    def handle_timeout(self) -> None: ...
+
+    def receive_packets(self, packets: list[bytes]) -> None: ...
+
+    def is_connected(self) -> bool: ...
+
+
+class LowLevelDriver:
+    """複数パケット受信 API を使って sans-I/O クライアントを駆動する。"""
+
+    def __init__(self, client: _SansIoClient, port: int) -> None:
+        self._client = client
+        self._server_addr = ("127.0.0.1", port)
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setblocking(False)
+
+    def close(self) -> None:
+        self._sock.close()
+
+    def _flush(self) -> None:
+        while True:
+            packet = self._client.next_send()
+            if packet is None:
+                break
+            self._sock.sendto(packet, self._server_addr)
+
+    def _receive_available(self) -> None:
+        # 到着済みの UDP データグラムをまとめて受け取り、受信バッチを再現する。
+        packets: list[bytes] = []
+        while True:
+            try:
+                data, _ = self._sock.recvfrom(65535)
+            except BlockingIOError:
+                break
+            packets.append(data)
+        if packets:
+            self._client.receive_packets(packets)
+
+    def pump(self, until: Callable[[], bool], timeout_s: float = 5.0) -> bool:
+        """until() が True を返すまでイベントを回す。達成できれば True。"""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            self._flush()
+            if until():
+                return True
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+
+            timeout_ms = self._client.next_timeout_ms()
+            wait = deadline - now
+            if timeout_ms is not None:
+                wait = min(wait, timeout_ms / 1000.0)
+            wait = max(0.0, wait)
+
+            readable, _, _ = select.select([self._sock], [], [], wait)
+            if readable:
+                self._receive_available()
+            elif timeout_ms is not None:
+                self._client.handle_timeout()
+
+
 def make_quic_client(port: int, *, alpn: str = ALPN) -> quiche.QuicClient:
     return quiche.QuicClient(
         "127.0.0.1",

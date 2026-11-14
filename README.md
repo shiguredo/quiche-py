@@ -28,7 +28,7 @@ C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所
 - I/O を持たない sans-I/O 設計
 - UDP データグラムの送受信とイベントループは利用側 (asyncio) の責務
 - 高レベル API: `AsyncQuicClient` / `AsyncHttp3Client` / `AsyncWebTransportClient`
-- 低レベル API: `QuicClient` / `Http3Client` / `WebTransportClient`
+- 低レベル API（テスト用途）: `QuicClient` / `Http3Client` / `WebTransportClient`
 - [nanobind](https://github.com/wjakob/nanobind) を利用しています
 - [scikit-build-core](https://github.com/scikit-build/scikit-build-core) を利用してビルドしています
 - free-threading (PEP 703) 対応
@@ -81,6 +81,17 @@ asyncio.run(main())
 ```
 
 QUIC は `AsyncQuicClient`（`alpn` 必須）、WebTransport over HTTP/3 は `AsyncWebTransportClient` を利用します。
+
+## 低レベル API
+
+テスト用途として Sans-I/O の低レベル API も公開しています。安定 API ではないため、予告なく変更することがあります。
+
+- `QuicClient` / `Http3Client` / `WebTransportClient` の `configure()` でトランスポートパラメータを設定できます
+- `receive_packets()` で複数の UDP データグラムをまとめて処理できます
+- `stats()` で QUIC 接続統計を取得できます
+- `Http3Client.settings()` と `settings_wire_order()` で HTTP/3 SETTINGS と受信順を取得できます
+- `WebTransportClient.session_stats()` / `datagram_stats()` / `protocol` / `is_draining()` / `notify_draining()` を利用できます
+- `QuicStream` / `WebTransportStream` の `atomic_write()` と `set_priority()` を利用できます
 
 ## ビルド前提
 
