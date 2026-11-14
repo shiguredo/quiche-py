@@ -137,12 +137,11 @@ if(NOT _bazel_name STREQUAL "bazelisk")
 endif()
 
 set(QUICHE_BAZEL_TARGET "//quiche-py:quiche_for_python" CACHE STRING "Bazel target for the QUICHE shared library")
-set(QUICHE_BAZEL_TEST_TARGET "//quiche-py:moqt_test_server" CACHE STRING "Bazel target for the MOQT E2E test server")
 set(QUICHE_BAZEL_COMPILATION_MODE "opt" CACHE STRING "Bazel compilation mode (-c opt|dbg|fastbuild)")
 
-message(STATUS "Running: ${BAZEL_EXECUTABLE} build -c ${QUICHE_BAZEL_COMPILATION_MODE} --features=-layering_check --host_features=-layering_check ${QUICHE_BAZEL_TARGET} ${QUICHE_BAZEL_TEST_TARGET}")
+message(STATUS "Running: ${BAZEL_EXECUTABLE} build -c ${QUICHE_BAZEL_COMPILATION_MODE} --features=-layering_check --host_features=-layering_check ${QUICHE_BAZEL_TARGET}")
 execute_process(
-  COMMAND ${BAZEL_EXECUTABLE} build -c ${QUICHE_BAZEL_COMPILATION_MODE} --features=-layering_check --host_features=-layering_check ${QUICHE_BAZEL_TARGET} ${QUICHE_BAZEL_TEST_TARGET}
+  COMMAND ${BAZEL_EXECUTABLE} build -c ${QUICHE_BAZEL_COMPILATION_MODE} --features=-layering_check --host_features=-layering_check ${QUICHE_BAZEL_TARGET}
   WORKING_DIRECTORY ${QUICHE_ROOT}
   RESULT_VARIABLE _quiche_bazel_rc
   OUTPUT_VARIABLE _quiche_bazel_out

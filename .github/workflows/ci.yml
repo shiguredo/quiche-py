@@ -85,8 +85,52 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+
+  moqt-e2e:
+    name: moqt-e2e
+    runs-on: ubuntu-26.04
+    # QUICHE のコールドビルドと MOQT テストサーバーのビルドを含むため長めに取る。
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+          python-version: "3.14"
+
+      - name: Install Bazelisk
+        run: |
+          case "${{ runner.arch }}" in
+            X64) bazelisk_arch=amd64 ;;
+            ARM64) bazelisk_arch=arm64 ;;
+            *) echo "unsupported runner.arch: ${{ runner.arch }}" && exit 1 ;;
+          esac
+          curl -fsSL -o /tmp/bazelisk "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-${bazelisk_arch}"
+          sudo install -m 0755 /tmp/bazelisk /usr/local/bin/bazelisk
+
+      - name: Cache Bazel
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-python-3.14-${{ hashFiles('deps.json', 'BUILD.bazel', 'src/bindings/**', 'src/tools/**') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-python-3.14-
+            ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-
+
+      - name: Build and install
+        run: uv sync --group e2e
+
+      - name: Build MOQT test server
+        working-directory: _build/_deps/quiche-src
+        run: bazelisk build -c opt --features=-layering_check --host_features=-layering_check //quiche-py:moqt_test_server
+
+      - name: Run MOQT E2E tests
+        env:
+          MOQT_E2E: "1"
+        run: uv run pytest tests/test_lowlevel_moqt.py
+
   slack-notify:
-    needs: [lint, test]
+    needs: [lint, test, moqt-e2e]
     if: always()
     runs-on: ubuntu-slim
     timeout-minutes: 5

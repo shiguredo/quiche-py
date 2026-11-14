@@ -8,6 +8,7 @@ aioquic は C 拡張で limited API を強制するため free-threaded ビル�
 スキップする。
 """
 
+import os
 import select
 import shutil
 import socket
@@ -339,6 +340,8 @@ def moqt_test_server_binary() -> Path:
     quiche_src = Path(__file__).resolve().parents[1] / "_build" / "_deps" / "quiche-src"
     binary = quiche_src / "bazel-bin" / "quiche-py" / "moqt_test_server"
     if not binary.exists():
+        if os.environ.get("MOQT_E2E") == "1":
+            pytest.fail(f"MOQT テストサーバーのバイナリが見つからない: {binary}")
         pytest.skip("MOQT テストサーバーがビルドされていないためスキップする")
     return binary
 
