@@ -1,6 +1,6 @@
 {
   "quiche": {
     "repository": "https://github.com/google/quiche",
-    "ref": "90c759f4a9d472480d7165703cfe5aa0fbbd2768"
+    "ref": "51a950dba2100da7e7977aa97759470507d1ebb8"
   }
 }
