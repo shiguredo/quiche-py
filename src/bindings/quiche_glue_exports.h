@@ -142,6 +142,64 @@ quiche_py_status quiche_py_wt_client_stream_set_priority(
     quiche_py_wt_client* client, uint32_t stream_id, uint32_t send_group_id,
     uint32_t send_order);
 
+quiche_py_moqt_client* quiche_py_moqt_client_create(
+    const quiche_py_moqt_client_options* options);
+void quiche_py_moqt_client_destroy(quiche_py_moqt_client* client);
+quiche_py_status quiche_py_moqt_client_start(quiche_py_moqt_client* client);
+quiche_py_status quiche_py_moqt_client_receive_packet(
+    quiche_py_moqt_client* client, const uint8_t* data, size_t data_len);
+quiche_py_status quiche_py_moqt_client_receive_packets(
+    quiche_py_moqt_client* client, const uint8_t* const* data,
+    const size_t* data_lengths, size_t packet_count);
+quiche_py_status quiche_py_moqt_client_next_send(quiche_py_moqt_client* client,
+                                                 uint8_t* buffer,
+                                                 size_t buffer_len,
+                                                 size_t* written);
+quiche_py_status quiche_py_moqt_client_next_timeout_ms(
+    quiche_py_moqt_client* client, uint64_t* timeout_ms, bool* has_timeout);
+quiche_py_status quiche_py_moqt_client_handle_timeout(
+    quiche_py_moqt_client* client);
+void quiche_py_moqt_client_close(quiche_py_moqt_client* client,
+                                 uint32_t error_code, const char* reason);
+bool quiche_py_moqt_client_is_connected(
+    const quiche_py_moqt_client* client);
+bool quiche_py_moqt_client_is_session_ready(
+    const quiche_py_moqt_client* client);
+bool quiche_py_moqt_client_is_terminated(
+    const quiche_py_moqt_client* client);
+quiche_py_status quiche_py_moqt_client_connect(
+    quiche_py_moqt_client* client);
+quiche_py_status quiche_py_moqt_client_subscribe(
+    quiche_py_moqt_client* client, const char* track_name);
+quiche_py_status quiche_py_moqt_client_unsubscribe(
+    quiche_py_moqt_client* client, const char* track_name);
+bool quiche_py_moqt_client_poll_event(quiche_py_moqt_client* client,
+                                      quiche_py_moqt_event* event);
+const char* quiche_py_moqt_client_last_error(
+    const quiche_py_moqt_client* client);
+quiche_py_status quiche_py_moqt_client_publish(quiche_py_moqt_client* client,
+                                                const char* track_name);
+quiche_py_status quiche_py_moqt_client_add_object(
+    quiche_py_moqt_client* client, const char* track_name, uint64_t group_id,
+    uint64_t object_id, const uint8_t* payload, size_t payload_len, bool fin);
+quiche_py_status quiche_py_moqt_client_ack_object(
+    quiche_py_moqt_client* client, const char* track_name, uint64_t group_id,
+    uint64_t object_id);
+quiche_py_status quiche_py_moqt_client_fetch(
+    quiche_py_moqt_client* client, const char* track_name,
+    uint64_t start_group, uint64_t start_object, uint64_t end_group,
+    bool has_end_object, uint64_t end_object, uint64_t* request_id);
+quiche_py_status quiche_py_moqt_client_publish_namespace(
+    quiche_py_moqt_client* client, const char* track_namespace);
+quiche_py_status quiche_py_moqt_client_publish_namespace_done(
+    quiche_py_moqt_client* client, const char* track_namespace);
+quiche_py_status quiche_py_moqt_client_subscribe_namespace(
+    quiche_py_moqt_client* client, const char* prefix);
+quiche_py_status quiche_py_moqt_client_unsubscribe_namespace(
+    quiche_py_moqt_client* client, const char* prefix);
+quiche_py_status quiche_py_moqt_client_track_status(
+    quiche_py_moqt_client* client, const char* track_name);
+
 #ifdef __cplusplus
 }
 #endif

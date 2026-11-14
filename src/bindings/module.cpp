@@ -1189,6 +1189,362 @@ bool PyWebTransportStream::is_open() const {
 
 }  // namespace
 
+
+const char* MoqtEventKindName(int kind) {
+  switch (kind) {
+    case QUICHE_PY_MOQT_EVENT_SUBSCRIBE_OK:
+      return "subscribe_ok";
+    case QUICHE_PY_MOQT_EVENT_SUBSCRIBE_ERROR:
+      return "subscribe_error";
+    case QUICHE_PY_MOQT_EVENT_OBJECT:
+      return "object";
+    case QUICHE_PY_MOQT_EVENT_PUBLISH_DONE:
+      return "publish_done";
+    case QUICHE_PY_MOQT_EVENT_MALFORMED_TRACK:
+      return "malformed_track";
+    case QUICHE_PY_MOQT_EVENT_STREAM_FIN:
+      return "stream_fin";
+    case QUICHE_PY_MOQT_EVENT_STREAM_RESET:
+      return "stream_reset";
+    case QUICHE_PY_MOQT_EVENT_SESSION_TERMINATED:
+      return "session_terminated";
+    case QUICHE_PY_MOQT_EVENT_GOAWAY:
+      return "goaway";
+    case QUICHE_PY_MOQT_EVENT_PUBLISH_OK:
+      return "publish_ok";
+    case QUICHE_PY_MOQT_EVENT_PUBLISH_ERROR:
+      return "publish_error";
+    case QUICHE_PY_MOQT_EVENT_FETCH_OK:
+      return "fetch_ok";
+    case QUICHE_PY_MOQT_EVENT_FETCH_ERROR:
+      return "fetch_error";
+    case QUICHE_PY_MOQT_EVENT_FETCH_DONE:
+      return "fetch_done";
+    case QUICHE_PY_MOQT_EVENT_PUBLISH_NAMESPACE_OK:
+      return "publish_namespace_ok";
+    case QUICHE_PY_MOQT_EVENT_PUBLISH_NAMESPACE_ERROR:
+      return "publish_namespace_error";
+    case QUICHE_PY_MOQT_EVENT_PUBLISH_NAMESPACE_CANCELLED:
+      return "publish_namespace_cancelled";
+    case QUICHE_PY_MOQT_EVENT_SUBSCRIBE_NAMESPACE_OK:
+      return "subscribe_namespace_ok";
+    case QUICHE_PY_MOQT_EVENT_SUBSCRIBE_NAMESPACE_ERROR:
+      return "subscribe_namespace_error";
+    case QUICHE_PY_MOQT_EVENT_NAMESPACE_ADDED:
+      return "namespace_added";
+    case QUICHE_PY_MOQT_EVENT_NAMESPACE_DONE:
+      return "namespace_done";
+    case QUICHE_PY_MOQT_EVENT_TRACK_STATUS_OK:
+      return "track_status_ok";
+    case QUICHE_PY_MOQT_EVENT_TRACK_STATUS_ERROR:
+      return "track_status_error";
+    default:
+      return "unknown";
+  }
+}
+
+class PyMoqtClient {
+ public:
+  PyMoqtClient(const std::string& host, uint16_t port,
+               const std::string& server_name, const std::string& path,
+               bool verify_peer)
+      : api_(Api()) {
+    quiche_py_moqt_client_options options{};
+    options.host = host.c_str();
+    options.port = port;
+    options.server_name = server_name.empty() ? nullptr : server_name.c_str();
+    options.path = path.empty() ? nullptr : path.c_str();
+    options.verify_peer = verify_peer;
+    handle_ = api_.moqt_client_create(&options);
+    if (handle_ == nullptr) {
+      throw std::runtime_error("failed to allocate MOQT client handle");
+    }
+    std::string err = last_error();
+    if (!err.empty()) {
+      api_.moqt_client_destroy(handle_);
+      handle_ = nullptr;
+      throw std::runtime_error("failed to create MOQT client: " + err);
+    }
+  }
+
+  ~PyMoqtClient() {
+    if (handle_ != nullptr) {
+      api_.moqt_client_destroy(handle_);
+    }
+  }
+
+  void start() {
+    ThrowIfNotOk("failed to start the MOQT handshake",
+                 api_.moqt_client_start(handle_));
+  }
+
+  bool connect() {
+    quiche_py_status status = api_.moqt_client_connect(handle_);
+    if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+      return false;
+    }
+    ThrowIfNotOk("failed to establish the MOQT session", status);
+    return true;
+  }
+
+  void receive_packet(const nb::bytes& data) {
+    std::string payload = BytesToString(data);
+    quiche_py_status status = api_.moqt_client_receive_packet(
+        handle_, reinterpret_cast<const uint8_t*>(payload.data()),
+        payload.size());
+    if (status == QUICHE_PY_STATUS_CLOSED) {
+      return;
+    }
+    ThrowIfNotOk("failed to process an incoming packet", status);
+  }
+
+  void receive_packets(const nb::list& packets) {
+    std::vector<std::string> payloads;
+    payloads.reserve(packets.size());
+    for (nb::handle item : packets) {
+      nb::bytes bytes = nb::cast<nb::bytes>(item);
+      payloads.push_back(BytesToString(bytes));
+    }
+    std::vector<const uint8_t*> data;
+    std::vector<size_t> data_lengths;
+    data.reserve(payloads.size());
+    data_lengths.reserve(payloads.size());
+    for (const std::string& payload : payloads) {
+      data.push_back(reinterpret_cast<const uint8_t*>(payload.data()));
+      data_lengths.push_back(payload.size());
+    }
+    quiche_py_status status = api_.moqt_client_receive_packets(
+        handle_, data.data(), data_lengths.data(), data.size());
+    if (status == QUICHE_PY_STATUS_CLOSED) {
+      return;
+    }
+    ThrowIfNotOk("failed to process incoming packets", status);
+  }
+
+  nb::object next_send() {
+    std::string buffer(kSendBufferSize, '\0');
+    size_t written = 0;
+    quiche_py_status status = api_.moqt_client_next_send(
+        handle_, reinterpret_cast<uint8_t*>(buffer.data()), buffer.size(),
+        &written);
+    if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+      return nb::none();
+    }
+    ThrowIfNotOk("failed to fetch an outgoing MOQT packet", status);
+    return BytesFromBuffer(buffer.data(), written);
+  }
+
+  nb::object next_timeout_ms() {
+    uint64_t timeout_ms = 0;
+    bool has_timeout = false;
+    ThrowIfNotOk("failed to query the next MOQT timeout",
+                 api_.moqt_client_next_timeout_ms(handle_, &timeout_ms,
+                                                   &has_timeout));
+    if (!has_timeout) {
+      return nb::none();
+    }
+    return nb::cast(timeout_ms);
+  }
+
+  void handle_timeout() {
+    quiche_py_status status = api_.moqt_client_handle_timeout(handle_);
+    if (status == QUICHE_PY_STATUS_CLOSED) {
+      return;
+    }
+    ThrowIfNotOk("failed to handle a MOQT timeout", status);
+  }
+
+  void close(uint32_t error_code = 0, const std::string& reason = "") {
+    api_.moqt_client_close(handle_, error_code, reason.c_str());
+  }
+
+  bool is_connected() const {
+    return api_.moqt_client_is_connected(handle_);
+  }
+
+  bool is_session_ready() const {
+    return api_.moqt_client_is_session_ready(handle_);
+  }
+
+  bool is_terminated() const {
+    return api_.moqt_client_is_terminated(handle_);
+  }
+
+  bool subscribe(const std::string& track_name) {
+    quiche_py_status status =
+        api_.moqt_client_subscribe(handle_, track_name.c_str());
+    if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+      return false;
+    }
+    ThrowIfNotOk("failed to subscribe to a MOQT track", status);
+    return true;
+  }
+
+  void unsubscribe(const std::string& track_name) {
+    ThrowIfNotOk("failed to unsubscribe from a MOQT track",
+                 api_.moqt_client_unsubscribe(handle_, track_name.c_str()));
+  }
+
+  bool publish(const std::string& track_name) {
+    quiche_py_status status =
+        api_.moqt_client_publish(handle_, track_name.c_str());
+    if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+      return false;
+    }
+    ThrowIfNotOk("failed to publish a MOQT track", status);
+    return true;
+  }
+
+  void add_object(const std::string& track_name, uint64_t group_id,
+                  uint64_t object_id, const nb::bytes& payload,
+                  bool fin = true) {
+    std::string data = BytesToString(payload);
+    ThrowIfNotOk(
+        "failed to add a MOQT object",
+        api_.moqt_client_add_object(
+            handle_, track_name.c_str(), group_id, object_id,
+            reinterpret_cast<const uint8_t*>(data.data()), data.size(), fin));
+  }
+
+  void ack_object(const std::string& track_name, uint64_t group_id,
+                  uint64_t object_id) {
+    ThrowIfNotOk("failed to acknowledge a MOQT object",
+                 api_.moqt_client_ack_object(handle_, track_name.c_str(),
+                                             group_id, object_id));
+  }
+
+  uint64_t fetch(const std::string& track_name, uint64_t start_group,
+                 uint64_t start_object, uint64_t end_group,
+                 const nb::object& end_object) {
+    uint64_t request_id = 0;
+    bool has_end_object = !end_object.is_none();
+    uint64_t end_object_value =
+        has_end_object ? nb::cast<uint64_t>(end_object) : 0;
+    ThrowIfNotOk(
+        "failed to send a MOQT FETCH",
+        api_.moqt_client_fetch(handle_, track_name.c_str(), start_group,
+                               start_object, end_group, has_end_object,
+                               end_object_value, &request_id));
+    return request_id;
+  }
+
+  bool publish_namespace(const std::string& track_namespace) {
+    quiche_py_status status = api_.moqt_client_publish_namespace(
+        handle_, track_namespace.c_str());
+    if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+      return false;
+    }
+    ThrowIfNotOk("failed to publish a MOQT namespace", status);
+    return true;
+  }
+
+  void publish_namespace_done(const std::string& track_namespace) {
+    ThrowIfNotOk("failed to send PUBLISH_NAMESPACE_DONE",
+                 api_.moqt_client_publish_namespace_done(
+                     handle_, track_namespace.c_str()));
+  }
+
+  bool subscribe_namespace(const std::string& prefix) {
+    quiche_py_status status = api_.moqt_client_subscribe_namespace(
+        handle_, prefix.c_str());
+    if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+      return false;
+    }
+    ThrowIfNotOk("failed to subscribe to a MOQT namespace", status);
+    return true;
+  }
+
+  void unsubscribe_namespace(const std::string& prefix) {
+    ThrowIfNotOk("failed to unsubscribe from a MOQT namespace",
+                 api_.moqt_client_unsubscribe_namespace(handle_,
+                                                        prefix.c_str()));
+  }
+
+  bool track_status(const std::string& track_name) {
+    quiche_py_status status =
+        api_.moqt_client_track_status(handle_, track_name.c_str());
+    if (status == QUICHE_PY_STATUS_WOULD_BLOCK) {
+      return false;
+    }
+    ThrowIfNotOk("failed to request MOQT track status", status);
+    return true;
+  }
+
+  nb::object poll_event() {
+    quiche_py_moqt_event event{};
+    if (!api_.moqt_client_poll_event(handle_, &event)) {
+      return nb::none();
+    }
+    nb::dict result;
+    result["kind"] = MoqtEventKindName(event.kind);
+    result["request_id"] = event.request_id;
+    result["track_name"] =
+        std::string(event.track_name, event.track_name_len);
+    result["group_id"] = event.group_id;
+    result["object_id"] = event.object_id;
+    result["subgroup_id"] =
+        event.has_subgroup ? nb::cast(event.subgroup_id) : nb::none();
+    result["offset"] = event.offset;
+    result["fin"] = event.fin;
+    result["payload"] =
+        event.payload == nullptr
+            ? nb::bytes("")
+            : BytesFromBuffer(reinterpret_cast<const char*>(event.payload),
+                              event.payload_len);
+    result["publisher_priority"] = event.publisher_priority;
+    result["status"] = event.status;
+    result["error_code"] = event.error_code;
+    result["reason"] = std::string(event.reason, event.reason_len);
+    result["new_session_uri"] =
+        std::string(event.new_session_uri, event.new_session_uri_len);
+    result["timeout_ms"] = event.timeout_ms;
+    return result;
+  }
+
+  std::string last_error() const {
+    const char* message = api_.moqt_client_last_error(handle_);
+    return message == nullptr ? std::string() : std::string(message);
+  }
+
+  quiche_py_moqt_client* handle() const { return handle_; }
+  const quiche_py_api& api() const { return api_; }
+
+  void ThrowIfNotOk(const std::string& context,
+                    quiche_py_status status) const {
+    if (status != QUICHE_PY_STATUS_OK) {
+      ThrowStatus(context, status);
+    }
+  }
+
+  [[noreturn]] void ThrowStatus(const std::string& context,
+                                quiche_py_status status) const {
+    std::string message = context;
+    std::string detail = last_error();
+    if (!detail.empty()) {
+      message += ": " + detail;
+    }
+    switch (status) {
+      case QUICHE_PY_STATUS_INVALID_ARGUMENT:
+      case QUICHE_PY_STATUS_TOO_BIG:
+        RaisePythonException(PyExc_ValueError, message);
+      case QUICHE_PY_STATUS_NOT_FOUND:
+        RaisePythonException(PyExc_KeyError, message);
+      case QUICHE_PY_STATUS_CLOSED:
+        RaisePythonException(PyExc_ConnectionError, message);
+      case QUICHE_PY_STATUS_ERROR:
+        RaisePythonException(PyExc_RuntimeError, message);
+      case QUICHE_PY_STATUS_WOULD_BLOCK:
+      case QUICHE_PY_STATUS_OK:
+        break;
+    }
+    throw std::runtime_error(message);
+  }
+
+ private:
+  const quiche_py_api& api_;
+  quiche_py_moqt_client* handle_ = nullptr;
+};
+
 NB_MODULE(quiche_ext, m) {
   (void)Api();
   m.doc() =
@@ -1591,6 +1947,62 @@ NB_MODULE(quiche_ext, m) {
               &quiche_py_wt_datagram_stats::expired_outgoing)
       .def_ro("lost_outgoing",
               &quiche_py_wt_datagram_stats::lost_outgoing);
+
+  nb::class_<PyMoqtClient>(m, "MoqtClient")
+      .def(nb::init<const std::string&, uint16_t, const std::string&,
+                    const std::string&, bool>(),
+           nb::arg("host"), nb::arg("port"), nb::arg("server_name") = "",
+           nb::arg("path") = "/", nb::arg("verify_peer") = true,
+           "MOQT draft-18 のクライアントを WebTransport/HTTP3 上に生成する。")
+      .def("start", &PyMoqtClient::start, nb::lock_self())
+      .def("connect", &PyMoqtClient::connect, nb::lock_self(),
+           "Send the MOQT CONNECT. Returns False when blocked.")
+      .def("receive_packet", &PyMoqtClient::receive_packet, nb::lock_self(),
+           nb::arg("data"))
+      .def("receive_packets", &PyMoqtClient::receive_packets, nb::lock_self(),
+           nb::arg("packets"))
+      .def("next_send", &PyMoqtClient::next_send, nb::lock_self())
+      .def("next_timeout_ms", &PyMoqtClient::next_timeout_ms, nb::lock_self())
+      .def("handle_timeout", &PyMoqtClient::handle_timeout, nb::lock_self())
+      .def("close", &PyMoqtClient::close, nb::lock_self(),
+           nb::arg("error_code") = 0, nb::arg("reason") = "")
+      .def("is_connected", &PyMoqtClient::is_connected, nb::lock_self())
+      .def("is_session_ready", &PyMoqtClient::is_session_ready,
+           nb::lock_self())
+      .def("is_terminated", &PyMoqtClient::is_terminated, nb::lock_self())
+      .def("subscribe", &PyMoqtClient::subscribe, nb::lock_self(),
+           nb::arg("track_name"),
+           "Send SUBSCRIBE. Returns False when the session is not ready.")
+      .def("unsubscribe", &PyMoqtClient::unsubscribe, nb::lock_self(),
+           nb::arg("track_name"))
+      .def("publish", &PyMoqtClient::publish, nb::lock_self(),
+           nb::arg("track_name"),
+           "Send PUBLISH for a track. Returns False when blocked.")
+      .def("add_object", &PyMoqtClient::add_object, nb::lock_self(),
+           nb::arg("track_name"), nb::arg("group_id"), nb::arg("object_id"),
+           nb::arg("payload"), nb::arg("fin") = true,
+           "Add an object to a published track.")
+      .def("ack_object", &PyMoqtClient::ack_object, nb::lock_self(),
+           nb::arg("track_name"), nb::arg("group_id"), nb::arg("object_id"))
+      .def("fetch", &PyMoqtClient::fetch, nb::lock_self(),
+           nb::arg("track_name"), nb::arg("start_group"),
+           nb::arg("start_object"), nb::arg("end_group"),
+           nb::arg("end_object") = nb::none(),
+           "Send FETCH and return a request ID.")
+      .def("publish_namespace", &PyMoqtClient::publish_namespace,
+           nb::lock_self(), nb::arg("track_namespace"))
+      .def("publish_namespace_done", &PyMoqtClient::publish_namespace_done,
+           nb::lock_self(), nb::arg("track_namespace"))
+      .def("subscribe_namespace", &PyMoqtClient::subscribe_namespace,
+           nb::lock_self(), nb::arg("prefix"))
+      .def("unsubscribe_namespace", &PyMoqtClient::unsubscribe_namespace,
+           nb::lock_self(), nb::arg("prefix"))
+      .def("track_status", &PyMoqtClient::track_status, nb::lock_self(),
+           nb::arg("track_name"))
+      .def("poll_event", &PyMoqtClient::poll_event, nb::lock_self(),
+           "次の MOQT イベントを取り出す。イベントが無い場合は None を返す。")
+      .def_prop_ro("last_error", &PyMoqtClient::last_error,
+                   nb::lock_self());
 
   m.def("version",
         [] { return std::string(Api().supported_versions_sample()); },

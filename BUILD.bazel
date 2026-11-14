@@ -13,6 +13,7 @@ cc_library(
     srcs = [
         "src/bindings/quiche_glue.cc",
         "src/bindings/quiche_glue_http3.cc",
+        "src/bindings/quiche_glue_moqt.cc",
         "src/bindings/quiche_glue_wt.cc",
     ],
     hdrs = [
@@ -31,6 +32,7 @@ cc_library(
     deps = [
         # QuicClientBase / FakeProofVerifier / LookupAddress 等は tool_support 側。
         # io_tool_support (実ソケット I/O) は sans-I/O 化後は不要。
+        "//quiche:moqt_core",
         "//quiche:quiche_unstable_api",
         "//quiche:quiche_unstable_api_tool_support",
     ],
@@ -54,4 +56,20 @@ cc_binary(
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
+)
+
+# MOQT の E2E テスト専用サーバー。wheel には含めず、テストから Bazel でビルドする。
+cc_binary(
+    name = "moqt_test_server",
+    testonly = 1,
+    srcs = ["src/tools/moqt_test_server.cc"],
+    deps = [
+        "//quiche:moqt_core",
+        "//quiche:quiche_unstable_api_test_support",
+        "//quiche:quiche_unstable_api",
+        "//quiche:quiche_unstable_api_tool_support",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
 )

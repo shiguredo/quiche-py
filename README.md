@@ -19,7 +19,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 [google/quiche](https://github.com/google/quiche) の Python バインディングです。
 
-クライアント側の QUIC (RFC 9000)、HTTP/3 (RFC 9114)、WebTransport over HTTP/3 (draft-ietf-webtrans-http3) を利用できます。
+クライアント側の QUIC (RFC 9000)、HTTP/3 (RFC 9114)、WebTransport over HTTP/3 (draft-ietf-webtrans-http3)、MOQT (draft-18) を利用できます。
 
 C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所有と送受信は Python (asyncio) 側の責務です。
 
@@ -28,7 +28,7 @@ C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所
 - I/O を持たない sans-I/O 設計
 - UDP データグラムの送受信とイベントループは利用側 (asyncio) の責務
 - 高レベル API: `AsyncQuicClient` / `AsyncHttp3Client` / `AsyncWebTransportClient`
-- 低レベル API（テスト用途）: `QuicClient` / `Http3Client` / `WebTransportClient`
+- 低レベル API（テスト用途）: `QuicClient` / `Http3Client` / `WebTransportClient` / `MoqtClient`
 - [nanobind](https://github.com/wjakob/nanobind) を利用しています
 - [scikit-build-core](https://github.com/scikit-build/scikit-build-core) を利用してビルドしています
 - free-threading (PEP 703) 対応
@@ -40,6 +40,7 @@ C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所
 | QUIC | 利用可能（`alpn` 必須） |
 | HTTP/3 | 利用可能 |
 | WebTransport over HTTP/3 | 利用可能 |
+| MOQT (draft-18) | クライアント利用可能（PUBLISH / FETCH / NAMESPACE / TRACK_STATUS / OBJECT_ACK） |
 | WebTransport over HTTP/2 | 対象外 |
 
 現状はクライアントのみです。サーバー API は提供していません。
@@ -92,6 +93,11 @@ QUIC は `AsyncQuicClient`（`alpn` 必須）、WebTransport over HTTP/3 は `As
 - `Http3Client.settings()` と `settings_wire_order()` で HTTP/3 SETTINGS と受信順を取得できます
 - `WebTransportClient.session_stats()` / `datagram_stats()` / `protocol` / `is_draining()` / `notify_draining()` を利用できます
 - `QuicStream` / `WebTransportStream` の `atomic_write()` と `set_priority()` を利用できます
+- `MoqtClient` で MOQT draft-18 の WebTransport セッションに接続できます
+- `subscribe()` / `unsubscribe()` でトラックを購読し、`poll_event()` で OBJECT を受信できます
+- `publish()` / `add_object()` でトラックを配信し、`fetch()` で範囲取得できます
+- `publish_namespace()` / `subscribe_namespace()` / `track_status()` / `ack_object()` を利用できます
+- `poll_event()` は `kind` に `subscribe_ok` / `subscribe_error` / `object` / `publish_ok` / `publish_error` / `fetch_ok` / `fetch_error` / `fetch_done` / `publish_namespace_ok` / `publish_namespace_error` / `publish_namespace_cancelled` / `subscribe_namespace_ok` / `subscribe_namespace_error` / `namespace_added` / `namespace_done` / `track_status_ok` / `track_status_error` / `publish_done` / `stream_fin` / `stream_reset` / `session_terminated` / `goaway` を持つ dict を返します
 
 ## ビルド前提
 

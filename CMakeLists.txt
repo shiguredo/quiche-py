@@ -68,10 +68,27 @@ if(NOT _quiche_ready)
     FORCE)
 endif()
 
+# MOQT の cc_library は QUICHE 側で公開されていないため、取得したツリーの
+# BUILD.bazel にだけ公開可視性を付ける。QUICHE のソースや API は変更しない。
+set(_quiche_build_file "${QUICHE_ROOT}/quiche/BUILD.bazel")
+if(EXISTS "${_quiche_build_file}")
+  file(READ "${_quiche_build_file}" _quiche_build_contents)
+  string(FIND "${_quiche_build_contents}"
+    "name = \"moqt_core\",\n    visibility" _moqt_visibility_pos)
+  if(_moqt_visibility_pos EQUAL -1)
+    string(REPLACE
+      "name = \"moqt_core\","
+      "name = \"moqt_core\",\n    visibility = [\"//visibility:public\"],"
+      _quiche_build_contents "${_quiche_build_contents}")
+    file(WRITE "${_quiche_build_file}" "${_quiche_build_contents}")
+  endif()
+endif()
+
 # 本パッケージ (BUILD.bazel + src) を QUICHE ワークツリーへ overlay する。
-# MODULE.bazel / quiche/BUILD.bazel は改変しない (Bazel の select は
-# @bazel_tools の組込み conditions を使い、io_tool_support にも依存しない)。
-# QUICHE_ROOT 指定時も ${QUICHE_ROOT}/quiche-py/ 配下だけを書き込む。
+# MODULE.bazel は改変しない。quiche/BUILD.bazel は上記の moqt_core 可視性
+# 付与だけを行う (Bazel の select は @bazel_tools の組込み conditions を使い、
+# io_tool_support にも依存しない)。
+# QUICHE_ROOT 指定時も moqt_core の可視性付与以外は ${QUICHE_ROOT}/quiche-py/ 配下だけを書き込む。
 get_filename_component(_qp_in_quiche "${QUICHE_ROOT}/quiche-py" ABSOLUTE)
 if(NOT "${PACKAGE_ROOT_ABS}" STREQUAL "${_qp_in_quiche}")
   file(MAKE_DIRECTORY "${_qp_in_quiche}")

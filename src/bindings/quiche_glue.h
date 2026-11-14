@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 enum {
-  QUICHE_PY_API_VERSION = 4,
+  QUICHE_PY_API_VERSION = 6,
 };
 
 typedef enum quiche_py_status {
@@ -57,6 +57,67 @@ typedef struct quiche_py_wt_client_options {
   const char* server_name;
   bool verify_peer;
 } quiche_py_wt_client_options;
+
+typedef struct quiche_py_moqt_client quiche_py_moqt_client;
+
+typedef struct quiche_py_moqt_client_options {
+  const char* host;
+  uint16_t port;
+  const char* server_name;
+  const char* path;
+  bool verify_peer;
+} quiche_py_moqt_client_options;
+
+/* MOQT のコールバックを Python 側で処理するためのイベント種別。 */
+typedef enum quiche_py_moqt_event_kind {
+  QUICHE_PY_MOQT_EVENT_SUBSCRIBE_OK = 1,
+  QUICHE_PY_MOQT_EVENT_SUBSCRIBE_ERROR = 2,
+  QUICHE_PY_MOQT_EVENT_OBJECT = 3,
+  QUICHE_PY_MOQT_EVENT_PUBLISH_DONE = 4,
+  QUICHE_PY_MOQT_EVENT_MALFORMED_TRACK = 5,
+  QUICHE_PY_MOQT_EVENT_STREAM_FIN = 6,
+  QUICHE_PY_MOQT_EVENT_STREAM_RESET = 7,
+  QUICHE_PY_MOQT_EVENT_SESSION_TERMINATED = 8,
+  QUICHE_PY_MOQT_EVENT_GOAWAY = 9,
+  QUICHE_PY_MOQT_EVENT_PUBLISH_OK = 10,
+  QUICHE_PY_MOQT_EVENT_PUBLISH_ERROR = 11,
+  QUICHE_PY_MOQT_EVENT_FETCH_OK = 12,
+  QUICHE_PY_MOQT_EVENT_FETCH_ERROR = 13,
+  QUICHE_PY_MOQT_EVENT_FETCH_DONE = 14,
+  QUICHE_PY_MOQT_EVENT_PUBLISH_NAMESPACE_OK = 15,
+  QUICHE_PY_MOQT_EVENT_PUBLISH_NAMESPACE_ERROR = 16,
+  QUICHE_PY_MOQT_EVENT_PUBLISH_NAMESPACE_CANCELLED = 17,
+  QUICHE_PY_MOQT_EVENT_SUBSCRIBE_NAMESPACE_OK = 18,
+  QUICHE_PY_MOQT_EVENT_SUBSCRIBE_NAMESPACE_ERROR = 19,
+  QUICHE_PY_MOQT_EVENT_NAMESPACE_ADDED = 20,
+  QUICHE_PY_MOQT_EVENT_NAMESPACE_DONE = 21,
+  QUICHE_PY_MOQT_EVENT_TRACK_STATUS_OK = 22,
+  QUICHE_PY_MOQT_EVENT_TRACK_STATUS_ERROR = 23,
+} quiche_py_moqt_event_kind;
+
+/* event 内の文字列と payload のポインタは次の poll_event 呼び出しまで有効。 */
+typedef struct quiche_py_moqt_event {
+  int kind;
+  uint64_t request_id;
+  const char* track_name;
+  size_t track_name_len;
+  uint64_t group_id;
+  uint64_t object_id;
+  uint64_t subgroup_id;
+  bool has_subgroup;
+  uint64_t offset;
+  bool fin;
+  const uint8_t* payload;
+  size_t payload_len;
+  uint64_t publisher_priority;
+  int status;
+  uint32_t error_code;
+  const char* reason;
+  size_t reason_len;
+  const char* new_session_uri;
+  size_t new_session_uri_len;
+  uint64_t timeout_ms;
+} quiche_py_moqt_event;
 
 /* 接続設定。QUICHE_PY_CONFIG_UNSET のフィールドは変更しない。 */
 #define QUICHE_PY_CONFIG_UNSET UINT64_MAX
@@ -370,6 +431,60 @@ typedef struct quiche_py_api {
                                                     uint32_t stream_id,
                                                     uint32_t send_group_id,
                                                     uint32_t send_order);
+
+  /* --- MOQT (draft-18, WebTransport over HTTP/3) --- */
+  quiche_py_moqt_client* (*moqt_client_create)(
+      const quiche_py_moqt_client_options* options);
+  void (*moqt_client_destroy)(quiche_py_moqt_client* client);
+  quiche_py_status (*moqt_client_start)(quiche_py_moqt_client* client);
+  quiche_py_status (*moqt_client_receive_packet)(
+      quiche_py_moqt_client* client, const uint8_t* data, size_t data_len);
+  quiche_py_status (*moqt_client_receive_packets)(
+      quiche_py_moqt_client* client, const uint8_t* const* data,
+      const size_t* data_lengths, size_t packet_count);
+  quiche_py_status (*moqt_client_next_send)(quiche_py_moqt_client* client,
+                                            uint8_t* buffer, size_t buffer_len,
+                                            size_t* written);
+  quiche_py_status (*moqt_client_next_timeout_ms)(
+      quiche_py_moqt_client* client, uint64_t* timeout_ms, bool* has_timeout);
+  quiche_py_status (*moqt_client_handle_timeout)(
+      quiche_py_moqt_client* client);
+  void (*moqt_client_close)(quiche_py_moqt_client* client,
+                            uint32_t error_code, const char* reason);
+  bool (*moqt_client_is_connected)(const quiche_py_moqt_client* client);
+  bool (*moqt_client_is_session_ready)(const quiche_py_moqt_client* client);
+  bool (*moqt_client_is_terminated)(const quiche_py_moqt_client* client);
+  quiche_py_status (*moqt_client_connect)(quiche_py_moqt_client* client);
+  quiche_py_status (*moqt_client_subscribe)(quiche_py_moqt_client* client,
+                                            const char* track_name);
+  quiche_py_status (*moqt_client_unsubscribe)(quiche_py_moqt_client* client,
+                                              const char* track_name);
+  bool (*moqt_client_poll_event)(quiche_py_moqt_client* client,
+                                 quiche_py_moqt_event* event);
+  const char* (*moqt_client_last_error)(const quiche_py_moqt_client* client);
+  quiche_py_status (*moqt_client_publish)(quiche_py_moqt_client* client,
+                                          const char* track_name);
+  quiche_py_status (*moqt_client_add_object)(
+      quiche_py_moqt_client* client, const char* track_name, uint64_t group_id,
+      uint64_t object_id, const uint8_t* payload, size_t payload_len,
+      bool fin);
+  quiche_py_status (*moqt_client_ack_object)(
+      quiche_py_moqt_client* client, const char* track_name, uint64_t group_id,
+      uint64_t object_id);
+  quiche_py_status (*moqt_client_fetch)(
+      quiche_py_moqt_client* client, const char* track_name,
+      uint64_t start_group, uint64_t start_object, uint64_t end_group,
+      bool has_end_object, uint64_t end_object, uint64_t* request_id);
+  quiche_py_status (*moqt_client_publish_namespace)(
+      quiche_py_moqt_client* client, const char* track_namespace);
+  quiche_py_status (*moqt_client_publish_namespace_done)(
+      quiche_py_moqt_client* client, const char* track_namespace);
+  quiche_py_status (*moqt_client_subscribe_namespace)(
+      quiche_py_moqt_client* client, const char* prefix);
+  quiche_py_status (*moqt_client_unsubscribe_namespace)(
+      quiche_py_moqt_client* client, const char* prefix);
+  quiche_py_status (*moqt_client_track_status)(
+      quiche_py_moqt_client* client, const char* track_name);
 } quiche_py_api;
 
 const quiche_py_api* quiche_py_get_api(void);

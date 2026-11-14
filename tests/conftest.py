@@ -8,6 +8,14 @@ aioquic は C 拡張で limited API を強制するため free-threaded ビル�
 スキップする。
 """
 
+import select
+import shutil
+import socket
+import subprocess
+import time
+from collections.abc import Iterator
+from pathlib import Path
+
 import pytest
 
 # aioquic がインストール可能か (free-threaded ビルドでは C 拡張がビルドできず不在)。
@@ -22,11 +30,9 @@ except ImportError:
 if AIOQUIC_AVAILABLE:
     import asyncio
     import datetime
-    import socket
     import tempfile
     import threading
-    from collections.abc import Callable, Iterator
-    from pathlib import Path
+    from collections.abc import Callable
     from typing import Self
 
     from aioquic.asyncio import serve
@@ -318,3 +324,93 @@ else:
     @pytest.fixture
     def http3_server() -> None:
         pytest.skip("aioquic は free-threaded ビルド非対応のため E2E テストをスキップする")
+
+
+def _free_udp_port() -> int:
+    """空いている UDP ポート番号を一つ返す。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture(scope="session")
+def moqt_test_server_binary() -> Path:
+    """MOQT の E2E テスト用サーバーを Bazel でビルドしてパスを返す。"""
+    bazelisk = shutil.which("bazelisk")
+    if bazelisk is None:
+        pytest.skip("bazelisk が無いため MOQT テストをスキップする")
+
+    quiche_src = Path(__file__).resolve().parents[1] / "_build" / "_deps" / "quiche-src"
+    if not quiche_src.is_dir():
+        pytest.skip("QUICHE のビルドツリーが無いため MOQT テストをスキップする")
+
+    result = subprocess.run(
+        [
+            bazelisk,
+            "build",
+            "-c",
+            "opt",
+            "--features=-layering_check",
+            "--host_features=-layering_check",
+            "//quiche-py:moqt_test_server",
+        ],
+        cwd=quiche_src,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            "MOQT テストサーバーのビルドに失敗した\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+    binary = quiche_src / "bazel-bin" / "quiche-py" / "moqt_test_server"
+    if not binary.exists():
+        pytest.fail(f"MOQT テストサーバーのバイナリが見つからない: {binary}")
+    return binary
+
+
+@pytest.fixture
+def moqt_server(moqt_test_server_binary: Path) -> Iterator[int]:
+    """MOQT テストサーバーを起動し、待ち受けポート番号を返す。"""
+    port = _free_udp_port()
+    process = subprocess.Popen(
+        [str(moqt_test_server_binary), str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        assert process.stdout is not None
+        deadline = time.monotonic() + 10.0
+        ready = False
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            remaining = max(0.0, deadline - time.monotonic())
+            readable, _, _ = select.select([process.stdout], [], [], remaining)
+            if not readable:
+                break
+            line = process.stdout.readline()
+            if line.strip() == f"READY {port}":
+                ready = True
+                break
+        if not ready:
+            # 読み出しでブロックしないよう、先にプロセスを終了させる。
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            output = process.stdout.read() if process.stdout is not None else ""
+            pytest.fail(f"MOQT テストサーバーが起動しなかった: {output}")
+        yield port
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
