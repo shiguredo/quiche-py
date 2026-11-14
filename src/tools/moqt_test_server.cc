@@ -1,7 +1,9 @@
 // MOQT draft-18 の E2E テスト用サーバー。テストから起動して 1 トラックを配信する。
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,6 +15,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "quiche/common/quiche_mem_slice.h"
+#include "quiche/quic/core/crypto/certificate_view.h"
+#include "quiche/quic/core/crypto/proof_source_x509.h"
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/moqt/moqt_fetch_task.h"
 #include "quiche/quic/moqt/moqt_key_value_pair.h"
@@ -25,7 +29,6 @@
 #include "quiche/quic/moqt/tools/moqt_server.h"
 #include "quiche/quic/platform/api/quic_ip_address.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
-#include "quiche/quic/test_tools/crypto_test_utils.h"
 
 namespace {
 
@@ -260,11 +263,51 @@ class StaticPublisher : public moqt::MoqtPublisher {
   std::shared_ptr<StaticTrackPublisher> status_track_;
 };
 
+std::string ReadFile(const std::string& path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return "";
+  }
+  return std::string(std::istreambuf_iterator<char>(input),
+                     std::istreambuf_iterator<char>());
+}
+
+// 証明書と秘密鍵の PEM ファイルからテスト用の ProofSource を作る。
+std::unique_ptr<quic::ProofSource> CreateProofSource(const std::string& cert_path,
+                                                     const std::string& key_path) {
+  std::ifstream key_input(key_path, std::ios::binary);
+  if (!key_input) {
+    std::cerr << "failed to open private key: " << key_path << std::endl;
+    return nullptr;
+  }
+  std::unique_ptr<quic::CertificatePrivateKey> key =
+      quic::CertificatePrivateKey::LoadPemFromStream(&key_input);
+  if (key == nullptr) {
+    std::cerr << "failed to load private key: " << key_path << std::endl;
+    return nullptr;
+  }
+  std::string cert = ReadFile(cert_path);
+  if (cert.empty()) {
+    std::cerr << "failed to read certificate: " << cert_path << std::endl;
+    return nullptr;
+  }
+  auto chain = quiche::QuicheReferenceCountedPointer<quic::ProofSource::Chain>(
+      new quic::ProofSource::Chain(std::vector<std::string>{cert}));
+  std::unique_ptr<quic::ProofSourceX509> proof_source =
+      quic::ProofSourceX509::Create(chain, std::move(*key));
+  if (proof_source == nullptr) {
+    std::cerr << "failed to create proof source" << std::endl;
+    return nullptr;
+  }
+  return proof_source;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 2) {
-    std::cerr << "usage: moqt_test_server <port>" << std::endl;
+  if (argc != 4) {
+    std::cerr << "usage: moqt_test_server <port> <cert.pem> <key.pem>"
+              << std::endl;
     return 1;
   }
   const int port = std::atoi(argv[1]);
@@ -284,8 +327,14 @@ int main(int argc, char** argv) {
   parameters.using_webtrans = true;
   parameters.support_object_acks = true;
 
+  std::unique_ptr<quic::ProofSource> proof_source =
+      CreateProofSource(argv[2], argv[3]);
+  if (proof_source == nullptr) {
+    return 1;
+  }
+
   moqt::MoqtServer server(
-      quic::test::crypto_test_utils::ProofSourceForTesting(),
+      std::move(proof_source),
       [publisher](absl::string_view /*path*/)
           -> absl::StatusOr<moqt::MoqtConfigureSessionCallback> {
         return moqt::MoqtConfigureSessionCallback(

@@ -373,12 +373,76 @@ def moqt_test_server_binary() -> Path:
     return binary
 
 
+@pytest.fixture(scope="session")
+def moqt_certs(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    """MOQT テストサーバー用の自己署名証明書と秘密鍵を生成する。"""
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("openssl が無いため MOQT テストをスキップする")
+    cert_dir = tmp_path_factory.mktemp("moqt-certs")
+    cert = cert_dir / "cert.der"
+    key = cert_dir / "key.pem"
+    result = subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert_dir / "cert.pem"),
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            "MOQT テスト用証明書の生成に失敗した\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+    # ProofSourceX509 は DER 形式の証明書を要求する。
+    der_result = subprocess.run(
+        [
+            openssl,
+            "x509",
+            "-in",
+            str(cert_dir / "cert.pem"),
+            "-outform",
+            "der",
+            "-out",
+            str(cert),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if der_result.returncode != 0:
+        pytest.fail(
+            "MOQT テスト用証明書の DER 変換に失敗した\n"
+            f"stdout:\n{der_result.stdout}\n"
+            f"stderr:\n{der_result.stderr}"
+        )
+    return cert, key
+
+
 @pytest.fixture
-def moqt_server(moqt_test_server_binary: Path) -> Iterator[int]:
+def moqt_server(moqt_test_server_binary: Path, moqt_certs: tuple[Path, Path]) -> Iterator[int]:
     """MOQT テストサーバーを起動し、待ち受けポート番号を返す。"""
     port = _free_udp_port()
+    cert, key = moqt_certs
     process = subprocess.Popen(
-        [str(moqt_test_server_binary), str(port)],
+        [str(moqt_test_server_binary), str(port), str(cert), str(key)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

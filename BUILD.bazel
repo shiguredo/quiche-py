@@ -65,7 +65,6 @@ cc_binary(
     srcs = ["src/tools/moqt_test_server.cc"],
     deps = [
         "//quiche:moqt_core",
-        "//quiche:quiche_unstable_api_test_support",
         "//quiche:quiche_unstable_api",
         "//quiche:quiche_unstable_api_tool_support",
         "@com_google_absl//absl/status",
