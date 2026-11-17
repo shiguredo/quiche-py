@@ -180,7 +180,19 @@ get_filename_component(QUICHE_SHLIB_DIR "${QUICHE_SHLIB}" DIRECTORY)
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(nanobind CONFIG REQUIRED)
 
+# nanobind は既定で TLSDESC (GNU2 TLS) を使うが、glibc 2.41 の
+# GLIBC_ABI_GNU2_TLS を要求するため auditwheel が manylinux に変換できない。
+# nanobind-static 側も伝統的な TLS 方式に揃える。
+set(NB_HAS_MTLS_GNU2 OFF)
+
 set(PY_PACKAGE "quiche")
+
+# free-threaded ビルドでは TLS 変数へのアクセスが GNU2 TLS になり、
+# glibc 2.41 の GLIBC_ABI_GNU2_TLS を要求する。auditwheel はこの ABI を
+# manylinux に変換できないため、伝統的な TLS 方式でコンパイルする。
+if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+  add_compile_options(-mtls-dialect=gnu)
+endif()
 
 nanobind_add_module(quiche_ext
   FREE_THREADED
