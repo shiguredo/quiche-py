@@ -47,6 +47,8 @@ C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所
 
 ## Python
 
+- 3.15
+- 3.15t
 - 3.14
 - 3.14t
 
@@ -122,7 +124,7 @@ make develop
 make test
 ```
 
-E2E テストの相手サーバーに [aioquic](https://github.com/aiortc/aioquic) を利用します。`make develop` / `make test` は dependency group `e2e` を含めて同期します。aioquic は free-threaded ビルド (3.14t) ではインストールできないため、該当環境では E2E の一部が skip されます。
+E2E テストの相手サーバーに [aioquic](https://github.com/aiortc/aioquic) を利用します。`make develop` / `make test` は dependency group `e2e` を含めて同期します。aioquic は free-threaded ビルド (3.14t / 3.15t) ではインストールできないため、該当環境では E2E の一部が skip されます。
 
 ## サポートについて
 

@@ -26,6 +26,8 @@ jobs:
           - name: ubuntu-26.04_armv8
             runs_on: ubuntu-26.04-arm
         python_version:
+          - "3.15"
+          - "3.15t"
           - "3.14"
           - "3.14t"
     runs-on: ${{ matrix.platform.runs_on }}
@@ -80,6 +82,8 @@ jobs:
           - name: macos-26_arm64
             runs_on: macos-26
         python_version:
+          - "3.15"
+          - "3.15t"
           - "3.14"
           - "3.14t"
     runs-on: ${{ matrix.platform.runs_on }}
@@ -142,6 +146,8 @@ jobs:
           - name: ubuntu-26.04_armv8
           - name: macos-26_arm64
         python_version:
+          - "3.15"
+          - "3.15t"
           - "3.14"
           - "3.14t"
     runs-on: ubuntu-26.04

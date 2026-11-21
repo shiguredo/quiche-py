@@ -1,7 +1,7 @@
 """webtransport-py を使った WebTransport over HTTP/3 相互運用テスト用の共通フィクスチャ。
 
 quiche-py はクライアント実装しか提供しないため、相互運用の相手サーバーとして
-webtransport-py の h3.Server を利用する。sans-I/O 化により C++ 側はブロッキング
+webtransport-py の Server を利用する。sans-I/O 化により C++ 側はブロッキング
 I/O を持たず GIL を抱え込まないため、webtransport-py のサーバーは同一プロセスの
 別スレッドの asyncio ループで動かせる (別プロセス不要)。
 
@@ -34,7 +34,7 @@ if WEBTRANSPORT_PY_AVAILABLE:
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.x509.oid import NameOID
-    from webtransport import h3
+    from webtransport import HTTPVersion, Server, Session
 
     # サーバーがセッション確立時に単方向ストリームで push する固定ペイロード。
     # テスト側 (test_webtransport_h3.py) と共有する。
@@ -73,7 +73,7 @@ if WEBTRANSPORT_PY_AVAILABLE:
         return cert_path, key_path
 
     class EchoServer:
-        """webtransport-py の h3 サーバーにエコー動作を設定するラッパ。
+        """webtransport-py のサーバーにエコー動作を設定するラッパ。
 
         - セッション確立: push_payload が指定されていればサーバー起点の単方向
           ストリームを開いて送る (accept_unidirectional_stream の相互運用確認用)
@@ -84,7 +84,7 @@ if WEBTRANSPORT_PY_AVAILABLE:
         - datagram: 受け取ったデータグラムをそのまま返す
         """
 
-        def __init__(self, server: h3.Server, push_payload: bytes | None = None) -> None:
+        def __init__(self, server: Server, push_payload: bytes | None = None) -> None:
             self._server = server
             self._push_payload = push_payload
             # クライアント起点 uni (stream_id % 4 == 2) → サーバー起点 uni (% 4 == 3)
@@ -94,41 +94,40 @@ if WEBTRANSPORT_PY_AVAILABLE:
             server.on_stream_data(self._on_stream_data)
             server.on_datagram(self._on_datagram)
 
-        async def _on_session_ready(self, session_id: int, addr: tuple[str, int]) -> None:
+        async def _on_session_ready(self, session: Session) -> None:
             # push_payload が指定された場合のみ、セッション確立を契機に
             # サーバー起点の単方向ストリームを開いて送る。
             if self._push_payload is None:
                 return
-            stream_id = await self._server.open_stream(addr, session_id)
+            stream_id = await session.open_stream()
             if stream_id >= 0:
-                await self._server.send_stream_data(addr, stream_id, self._push_payload, fin=True)
+                await session.send_stream_data(stream_id, self._push_payload, fin=True)
 
         async def _on_stream_data(
             self,
-            session_id: int,
+            session: Session,
             stream_id: int,
             data: bytes,
-            addr: tuple[str, int],
         ) -> None:
             if stream_id % 4 == 2:
                 # クライアント起点の単方向ストリーム。逆方向に書けないため、
                 # サーバー起点の単方向ストリームを対応付けて返す。
                 out_id = self._uni_map.get(stream_id)
                 if out_id is None:
-                    out_id = await self._server.open_stream(addr, session_id)
+                    out_id = await session.open_stream()
                     if out_id < 0:
                         return
                     self._uni_map[stream_id] = out_id
-                await self._server.send_stream_data(addr, out_id, data, fin=True)
+                await session.send_stream_data(out_id, data, fin=True)
             else:
                 # 双方向ストリームは同一ストリームに返す。
-                await self._server.send_stream_data(addr, stream_id, data, fin=True)
+                await session.send_stream_data(stream_id, data, fin=True)
 
-        async def _on_datagram(self, session_id: int, data: bytes, addr: tuple[str, int]) -> None:
-            await self._server.send_datagram(addr, session_id, data)
+        async def _on_datagram(self, session: Session, data: bytes) -> None:
+            await session.send_datagram(data)
 
     class WebtransportPyServer:
-        """別スレッドの asyncio ループで動く webtransport-py の h3 エコーサーバー。"""
+        """別スレッドの asyncio ループで動く webtransport-py のエコーサーバー。"""
 
         def __init__(
             self,
@@ -140,7 +139,7 @@ if WEBTRANSPORT_PY_AVAILABLE:
             self._cert_path = cert_path
             self._key_path = key_path
             self._push_payload = push_payload
-            self._server: h3.Server | None = None
+            self._server: Server | None = None
             self._loop = asyncio.new_event_loop()
             self._ready = threading.Event()
             self._startup_error: BaseException | None = None
@@ -187,9 +186,10 @@ if WEBTRANSPORT_PY_AVAILABLE:
             self._loop.run_forever()
 
         async def _serve(self) -> None:
-            self._server = h3.Server(
+            self._server = Server(
                 host="127.0.0.1",
                 port=0,
+                http_version=HTTPVersion.HTTP3,
                 certfile=str(self._cert_path),
                 keyfile=str(self._key_path),
             )

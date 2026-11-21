@@ -30,6 +30,8 @@ jobs:
           - name: macos-26_arm64
             runs_on: macos-26
         python_version:
+          - "3.15"
+          - "3.15t"
           - "3.14"
           - "3.14t"
     runs-on: ${{ matrix.platform.runs_on }}
@@ -70,7 +72,7 @@ jobs:
         run: |
           # aioquic (e2e グループ) は free-threaded ビルド非対応のため、通常ビルドでのみ
           # インストールする。
-          if [ "${{ matrix.python_version }}" = "3.14t" ]; then
+          if [[ "${{ matrix.python_version }}" == *t ]]; then
             uv sync
           else
             uv sync --group e2e
@@ -79,7 +81,7 @@ jobs:
       - name: Type check
         # aioquic (e2e) は free-threaded 非対応でインストールされないため、conftest の
         # 条件付き import が解決できず ty が失敗する。型チェックは通常ビルドでのみ行う。
-        if: ${{ matrix.python_version != '3.14t' }}
+        if: ${{ !endsWith(matrix.python_version, 't') }}
         run: uvx ty check
 
       - name: Run tests
@@ -88,6 +90,14 @@ jobs:
 
   moqt-e2e:
     name: moqt-e2e
+    strategy:
+      fail-fast: false
+      matrix:
+        python_version:
+          - "3.15"
+          - "3.15t"
+          - "3.14"
+          - "3.14t"
     runs-on: ubuntu-26.04
     # QUICHE のコールドビルドと MOQT テストサーバーのビルドを含むため長めに取る。
     timeout-minutes: 45
@@ -96,7 +106,7 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: false
-          python-version: "3.14"
+          python-version: ${{ matrix.python_version }}
 
       - name: Install Bazelisk
         run: |
@@ -112,9 +122,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-python-3.14-${{ hashFiles('deps.json', 'BUILD.bazel', 'src/bindings/**', 'src/tools/**') }}
+          key: ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-python-${{ matrix.python_version }}-${{ hashFiles('deps.json', 'BUILD.bazel', 'src/bindings/**', 'src/tools/**') }}
           restore-keys: |
-            ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-python-3.14-
+            ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-python-${{ matrix.python_version }}-
             ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-
 
       - name: Build and install
