@@ -128,7 +128,12 @@ jobs:
             ${{ runner.os }}-bazel-ubuntu-26.04_x86_64-
 
       - name: Build and install
-        run: uv sync --group e2e
+        run: |
+          if [[ "${{ matrix.python_version }}" == *t ]]; then
+            uv sync
+          else
+            uv sync --group e2e
+          fi
 
       - name: Build MOQT test server
         working-directory: _build/_deps/quiche-src
