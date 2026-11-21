@@ -1953,7 +1953,7 @@ NB_MODULE(quiche_ext, m) {
                     const std::string&, bool>(),
            nb::arg("host"), nb::arg("port"), nb::arg("server_name") = "",
            nb::arg("path") = "/", nb::arg("verify_peer") = true,
-           "MOQT draft-18 のクライアントを WebTransport/HTTP3 上に生成する。")
+           "MOQT draft-22 / draft-18 のクライアントを WebTransport/HTTP3 上に生成する。")
       .def("start", &PyMoqtClient::start, nb::lock_self())
       .def("connect", &PyMoqtClient::connect, nb::lock_self(),
            "Send the MOQT CONNECT. Returns False when blocked.")

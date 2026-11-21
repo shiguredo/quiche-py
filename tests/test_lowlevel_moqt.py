@@ -1,4 +1,4 @@
-"""MOQT draft-18 クライアントの低レベル E2E テスト。"""
+"""MOQT draft-22 / draft-18 クライアントの低レベル E2E テスト。"""
 
 from e2e_support import LowLevelDriver
 

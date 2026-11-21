@@ -1,4 +1,4 @@
-// MOQT draft-18 の E2E テスト用サーバー。テストから起動して 1 トラックを配信する。
+// MOQT draft-22 / draft-18 の E2E テスト用サーバー。テストから起動して 1 トラックを配信する。
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -323,7 +323,8 @@ int main(int argc, char** argv) {
   auto publisher = std::make_shared<StaticPublisher>(track, status_track);
 
   moqt::MoqtSessionParameters parameters(quic::Perspective::IS_SERVER);
-  parameters.version = std::string(moqt::kDraft18);
+  parameters.versions = {std::string(moqt::kDraft22),
+                         std::string(moqt::kDraft18)};
   parameters.using_webtrans = true;
   parameters.support_object_acks = true;
 

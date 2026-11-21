@@ -432,7 +432,7 @@ typedef struct quiche_py_api {
                                                     uint32_t send_group_id,
                                                     uint32_t send_order);
 
-  /* --- MOQT (draft-18, WebTransport over HTTP/3) --- */
+  /* --- MOQT (draft-22 / draft-18, WebTransport over HTTP/3) --- */
   quiche_py_moqt_client* (*moqt_client_create)(
       const quiche_py_moqt_client_options* options);
   void (*moqt_client_destroy)(quiche_py_moqt_client* client);

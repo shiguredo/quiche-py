@@ -1,6 +1,6 @@
 """Google QUICHE の Python バインディング。
 
-クライアント側の QUIC / HTTP/3 / WebTransport over HTTP/3 / MOQT draft-18 を提供する。
+クライアント側の QUIC / HTTP/3 / WebTransport over HTTP/3 / MOQT draft-22 / draft-18 を提供する。
 """
 
 from .aio import AsyncQuicClient, AsyncQuicStream

@@ -1,5 +1,5 @@
-/* MOQT draft-18 クライアント (WebTransport over HTTP/3) の C API 実装。
- * 仕様: draft-ietf-moq-transport-18 */
+/* MOQT draft-22 / draft-18 クライアント (WebTransport over HTTP/3) の C API 実装。
+ * 仕様: draft-ietf-moq-transport-22 / draft-ietf-moq-transport-18 */
 #include "quiche_glue.h"
 #include "quiche_glue_exports.h"
 #include "quiche_glue_sans_io.h"
@@ -683,7 +683,9 @@ struct quiche_py_moqt_client : public MoqtEventSink {
     headers[":path"] = path_;
     headers[":method"] = "CONNECT";
     headers[":protocol"] = "webtransport";
-    std::vector<std::string> subprotocols = {std::string(moqt::kDraft18)};
+    // 最新の draft-22 を優先し、draft-18 のサーバーにも接続できるようにする。
+    std::vector<std::string> subprotocols = {std::string(moqt::kDraft22),
+                                             std::string(moqt::kDraft18)};
     absl::StatusOr<std::string> protocols =
         webtransport::SerializeSubprotocolRequestHeader(subprotocols);
     if (!protocols.ok()) {
@@ -700,7 +702,8 @@ struct quiche_py_moqt_client : public MoqtEventSink {
     }
 
     moqt::MoqtSessionParameters parameters(quic::Perspective::IS_CLIENT);
-    parameters.version = std::string(moqt::kDraft18);
+    parameters.versions = {std::string(moqt::kDraft22),
+                           std::string(moqt::kDraft18)};
     parameters.using_webtrans = true;
     parameters.path = path_;
     parameters.authority = server_name_;

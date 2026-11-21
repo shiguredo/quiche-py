@@ -19,7 +19,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 [google/quiche](https://github.com/google/quiche) の Python バインディングです。
 
-クライアント側の QUIC (RFC 9000)、HTTP/3 (RFC 9114)、WebTransport over HTTP/3 (draft-ietf-webtrans-http3)、MOQT (draft-18) を利用できます。
+クライアント側の QUIC (RFC 9000)、HTTP/3 (RFC 9114)、WebTransport over HTTP/3 (draft-ietf-webtrans-http3)、MOQT (draft-22 / draft-18) を利用できます。
 
 C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所有と送受信は Python (asyncio) 側の責務です。
 
@@ -40,7 +40,7 @@ C++ コアは I/O を持たない sans-I/O 設計です。UDP ソケットの所
 | QUIC | 利用可能（`alpn` 必須） |
 | HTTP/3 | 利用可能 |
 | WebTransport over HTTP/3 | 利用可能 |
-| MOQT (draft-18) | クライアント利用可能（PUBLISH / FETCH / NAMESPACE / TRACK_STATUS / OBJECT_ACK） |
+| MOQT (draft-22 / draft-18) | クライアント利用可能（PUBLISH / FETCH / NAMESPACE / TRACK_STATUS / OBJECT_ACK） |
 | WebTransport over HTTP/2 | 対象外 |
 
 現状はクライアントのみです。サーバー API は提供していません。
@@ -93,7 +93,7 @@ QUIC は `AsyncQuicClient`（`alpn` 必須）、WebTransport over HTTP/3 は `As
 - `Http3Client.settings()` と `settings_wire_order()` で HTTP/3 SETTINGS と受信順を取得できます
 - `WebTransportClient.session_stats()` / `datagram_stats()` / `protocol` / `is_draining()` / `notify_draining()` を利用できます
 - `QuicStream` / `WebTransportStream` の `atomic_write()` と `set_priority()` を利用できます
-- `MoqtClient` で MOQT draft-18 の WebTransport セッションに接続できます
+- `MoqtClient` で MOQT draft-22 の WebTransport セッション（draft-18 にもフォールバック）に接続できます
 - `subscribe()` / `unsubscribe()` でトラックを購読し、`poll_event()` で OBJECT を受信できます
 - `publish()` / `add_object()` でトラックを配信し、`fetch()` で範囲取得できます
 - `publish_namespace()` / `subscribe_namespace()` / `track_status()` / `ack_object()` を利用できます
